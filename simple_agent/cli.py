@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=settings.stream and not args.no_stream,
         events=printer.events(),
     )
+    agent.tools.approve = _confirm  # write_file and run_shell ask here before running.
     trace = settings.trace if args.trace is None else args.trace
     if trace:
         # The tracer prints each step itself (whole replies, not streamed),
@@ -113,7 +114,8 @@ def _command(agent: Agent, line: str) -> str | None:
         print(HELP)
     elif cmd == "/tools":
         for spec in agent.tools.specs():
-            print(f"  {spec.name}: {spec.description}")
+            note = " (asks first)" if agent.tools.asks_first(spec.name) else ""
+            print(f"  {spec.name}{note}: {spec.description}")
     elif cmd == "/history":
         for m in agent.history:
             if m.role == "tool":
@@ -129,6 +131,23 @@ def _command(agent: Agent, line: str) -> str | None:
     else:
         print(f"  Unknown command {cmd}. Type /help.")
     return None
+
+
+def _confirm(name: str, arguments: dict) -> bool:
+    """Show a tool call that changes something and ask the user to allow it."""
+    print(f"  approve> the agent wants to run {name} with:")
+    for key, value in arguments.items():
+        lines = str(value).splitlines() or [""]
+        shown = lines[:15] + ([f"... ({len(lines) - 15} more lines)"] if len(lines) > 15 else [])
+        print(f"    {key}: {shown[0]}")
+        for line in shown[1:]:
+            print(f"    {' ' * len(key)}  {line}")
+    try:
+        answer = input("  Allow? [y/N] ").strip().lower()
+    except EOFError:  # No one to ask (e.g. input is piped in), so the answer is no.
+        print()
+        return False
+    return answer in ("y", "yes")
 
 
 class Printer:
