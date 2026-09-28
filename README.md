@@ -60,19 +60,44 @@ simple-agent --provider anthropic --model claude-haiku-4-5    # cheaper and fast
 
 Type messages at the `you>` prompt. Lines starting with `/` are commands:
 
-| Command    | What it does                          |
-| ---------- | ------------------------------------- |
-| `/help`    | list commands                         |
-| `/tools`   | list the tools the agent can call     |
-| `/history` | show the conversation so far          |
-| `/usage`   | tokens used this session              |
-| `/reset`   | start a new conversation              |
-| `/exit`    | quit (Ctrl+D also works)              |
+| Command        | What it does                      |
+| -------------- | --------------------------------- |
+| `/help`        | list commands                     |
+| `/tools`       | list the tools the agent can call |
+| `/history`     | show the conversation so far      |
+| `/usage`       | tokens used this session          |
+| `/reset`       | start a new conversation          |
+| `/save [name]` | save the conversation             |
+| `/load <name>` | load a saved conversation         |
+| `/sessions`    | list saved conversations          |
+| `/exit`        | quit (Ctrl+D also works)          |
 
 Replies stream in as the model writes them. Add `--no-stream` to wait for whole
 replies instead (useful if a server doesn't support streaming). Add `-v` to also
 see what each tool returned. Pass a question as arguments to
 ask once and exit: `simple-agent "what files are in this folder?"`.
+
+### Saved sessions
+
+Conversations can be saved and picked up later:
+
+```
+you> /save tea-research
+  (saved to sessions/tea-research.json)
+...
+$ simple-agent --resume tea-research
+(resumed tea-research: 6 messages, saved 2026-09-28T23:58:10+00:00)
+```
+
+When you quit, the conversation is also saved as `last`, so
+`simple-agent --resume last` continues where you stopped. `/sessions` lists
+what's saved and `/load <name>` switches to another conversation.
+
+A session file is plain JSON: the history plus the provider, model and token
+usage. Because the history is provider-neutral, you can save a conversation
+with a local model and resume it with Claude (or the other way round) to see
+how each continues it. Claude's replies are stored with their original blocks,
+thinking included, so a resumed Claude conversation is replayed exactly.
 
 ### Trace mode
 
@@ -115,7 +140,8 @@ Set `trace = true` in `config.toml` to have it on all the time.
 
 Instead of flags, copy `config.example.toml` to `config.toml` (in the folder you
 run from, or `~/.config/simple-agent/config.toml`) and edit it. You can set the
-provider, model, server URL, system prompt, step limit and trace mode there. Flags always
+provider, model, server URL, system prompt, step limit, streaming, trace mode
+and where traces and sessions are stored there. Flags always
 win over the file. API keys are read from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 so they don't have to live in a file.
 
@@ -134,6 +160,7 @@ so they don't have to live in a file.
 | [`simple_agent/providers/openai_compat.py`](simple_agent/providers/openai_compat.py) | Provider for LM Studio and any OpenAI-compatible server. |
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
+| [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/trace.py`](simple_agent/trace.py) | Trace mode: prints each loop step and writes the JSONL log. |
 | [`simple_agent/config.py`](simple_agent/config.py) | Merges defaults, `config.toml` and CLI flags. |
 | [`simple_agent/cli.py`](simple_agent/cli.py) | The terminal REPL. |
@@ -247,7 +274,6 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
 **Ideas for research and learning**, roughly in order of difficulty:
 
 - Measure time to first token with streaming on, and compare models.
-- Save and load conversations (the history is just a list of dataclasses).
 - Remember "always allow" answers per tool for the rest of a session.
 - Trim or summarize old history when the conversation gets long.
 - Write a small script that reads two trace logs and compares how different

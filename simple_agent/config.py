@@ -30,6 +30,7 @@ class Settings:
     stream: bool = True
     trace: bool = False
     trace_dir: str = "traces"
+    sessions_dir: str = "sessions"
 
 
 def load_file(path: str | None) -> dict:
@@ -69,4 +70,5 @@ def resolve(
         stream=bool(file_config.get("stream", True)),
         trace=bool(file_config.get("trace", False)),
         trace_dir=file_config.get("trace_dir", "traces"),
+        sessions_dir=file_config.get("sessions_dir", "sessions"),
     )
