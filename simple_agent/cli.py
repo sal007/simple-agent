@@ -10,6 +10,7 @@ from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
 from .providers import create_provider
+from .trace import Tracer
 
 HELP = """Commands:
   /help     show this help
@@ -27,6 +28,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-url", help="API base URL for the openai provider (LM Studio, Ollama, ...).")
     parser.add_argument("--config", help="Path to a config.toml (default: ./config.toml, then ~/.config/simple-agent/).")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show tool results, not just tool calls.")
+    parser.add_argument("--trace", action="store_true", default=None, help="Print every step of the agent loop and save it to a log file.")
+    parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("prompt", nargs="*", help="Ask one question and exit instead of starting the REPL.")
     return parser.parse_args(argv)
@@ -47,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=settings.max_steps,
         events=_printing_events(args.verbose),
     )
+    trace = settings.trace if args.trace is None else args.trace
+    if trace:
+        # The tracer prints tool calls itself, so it replaces the normal printing.
+        tracer = Tracer(args.trace_dir or settings.trace_dir)
+        tracer.start(provider, agent.system_prompt, agent.tools.specs())
+        agent.events = tracer.events()
 
     if args.prompt:  # One-shot mode: simple-agent "what time is it?"
         return 0 if _ask(agent, " ".join(args.prompt)) else 1

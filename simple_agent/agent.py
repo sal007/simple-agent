@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .providers.base import Message, Provider, ToolCall
+from .providers.base import Message, Provider, Reply, ToolCall
 from .tools import ToolRegistry, default_tools
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -28,10 +28,21 @@ DEFAULT_SYSTEM_PROMPT = (
 
 @dataclass
 class AgentEvents:
-    """Optional callbacks so a UI can show what the agent is doing."""
+    """Optional callbacks so a UI (or the tracer in trace.py) can see what the agent is doing.
 
+    They fire in this order for one turn:
+      on_turn_start -> (on_model_request -> on_model_reply -> [on_tool_call -> on_tool_result]...)...
+      -> on_turn_end, or on_error if something failed.
+    """
+
+    on_turn_start: Callable[[str], None] = lambda user_input: None
+    on_model_request: Callable[[int, list[Message]], None] = lambda step, messages: None
+    on_model_reply: Callable[[int, Reply], None] = lambda step, reply: None
     on_tool_call: Callable[[ToolCall], None] = lambda call: None
     on_tool_result: Callable[[ToolCall, str], None] = lambda call, result: None
+    on_turn_end: Callable[[str], None] = lambda answer: None
+    on_error: Callable[[BaseException], None] = lambda error: None
+    on_reset: Callable[[], None] = lambda: None
 
 
 @dataclass
@@ -48,17 +59,23 @@ class Agent:
         """Run one full turn: the user's message in, the model's final answer out."""
         start = len(self.history)
         self.history.append(Message(role="user", content=user_input))
+        self.events.on_turn_start(user_input)
         try:
-            return self._loop()
-        except BaseException:
+            answer = self._loop()
+        except BaseException as exc:
             # If the API call fails (or you press Ctrl+C), drop the half-finished
             # turn so the history stays valid for the next message.
             del self.history[start:]
+            self.events.on_error(exc)
             raise
+        self.events.on_turn_end(answer)
+        return answer
 
     def _loop(self) -> str:
-        for _ in range(self.max_steps):
+        for step in range(1, self.max_steps + 1):
+            self.events.on_model_request(step, self.history)
             reply = self.provider.chat(self.system_prompt, self.history, self.tools.specs())
+            self.events.on_model_reply(step, reply)
             for key, value in reply.usage.items():
                 self.usage[key] = self.usage.get(key, 0) + value
             self.history.append(reply.message)
@@ -77,3 +94,4 @@ class Agent:
     def reset(self) -> None:
         """Forget the conversation (the system prompt and tools stay)."""
         self.history.clear()
+        self.events.on_reset()
