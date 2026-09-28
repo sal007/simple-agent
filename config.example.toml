@@ -1,0 +1,23 @@
+# Copy this file to config.toml (or ~/.config/simple-agent/config.toml) and edit.
+# Command-line flags override anything set here.
+
+# Which provider to use: "openai" (any OpenAI-compatible server, e.g. LM Studio) or "anthropic".
+provider = "openai"
+
+# The system prompt the agent starts every conversation with.
+# system_prompt = "You are a helpful assistant..."
+
+# Safety net: the most model calls the agent makes for a single user message.
+max_steps = 10
+
+[providers.openai]
+# LM Studio's local server. Ollama is http://localhost:11434/v1, OpenAI is https://api.openai.com/v1.
+base_url = "http://localhost:1234/v1"
+# Use the model identifier LM Studio shows for the loaded model.
+model = "qwen2.5-7b-instruct"
+# Local servers ignore the key; for a cloud service set OPENAI_API_KEY instead of writing it here.
+api_key = "lm-studio"
+
+[providers.anthropic]
+model = "claude-opus-5-5"
+# The key is read from the ANTHROPIC_API_KEY environment variable.
