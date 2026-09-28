@@ -9,7 +9,11 @@ That is what lets the same agent run against LM Studio, OpenAI or Claude.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+
+
+# Called with each piece of text as the model generates it (streaming).
+TextCallback = Callable[[str], None]
 
 
 @dataclass
@@ -65,6 +69,12 @@ class Provider(Protocol):
     name: str
     model: str
 
-    def chat(self, system: str, messages: list[Message], tools: list[ToolSpec]) -> Reply:
-        """Send the conversation so far and return the model's next message."""
+    def chat(
+        self, system: str, messages: list[Message], tools: list[ToolSpec], on_text: TextCallback | None = None
+    ) -> Reply:
+        """Send the conversation so far and return the model's next message.
+
+        If on_text is given, stream: call it with each piece of text as it is
+        generated. The complete Reply is still returned at the end either way.
+        """
         ...

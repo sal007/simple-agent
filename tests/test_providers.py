@@ -27,9 +27,15 @@ def fake_server():
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
-                payload = json.dumps(handler(body, len(requests))).encode()
+                response = handler(body, len(requests))
+                if isinstance(response, list):  # A streamed reply: Server-Sent Events.
+                    payload = "".join(response).encode()
+                    content_type = "text/event-stream"
+                else:
+                    payload = json.dumps(response).encode()
+                    content_type = "application/json"
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
@@ -71,9 +77,38 @@ def openai_reply(body, n):
     }
 
 
-def test_openai_compatible_round_trip(fake_server):
-    url, requests = fake_server(openai_reply)
-    agent = Agent(provider=create_provider("openai", "local-model", base_url=url + "/v1"))
+def openai_stream(body, n):
+    """The same two replies as openai_reply, sent the way a streaming server sends them."""
+    assert body["stream"] is True
+
+    def chunk(delta, finish=None, usage=None):
+        choices = [{"index": 0, "delta": delta, "finish_reason": finish}] if delta is not None else []
+        data = {"id": f"c{n}", "object": "chat.completion.chunk", "created": 0, "model": "m", "choices": choices}
+        if usage:
+            data["usage"] = usage
+        return f"data: {json.dumps(data)}\n\n"
+
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    if n == 1:
+        # The tool call arrives in pieces: id and name first, then the arguments.
+        events = [
+            chunk({"role": "assistant", "tool_calls": [
+                {"index": 0, "id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": ""}}]}),
+            chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"expression": '}}]}),
+            chunk({"tool_calls": [{"index": 0, "function": {"arguments": '"6*7"}'}}]}),
+            chunk({}, finish="tool_calls"),
+        ]
+    else:
+        events = [chunk({"role": "assistant", "content": "The answer "}), chunk({"content": "is 42."}), chunk({}, finish="stop")]
+    return events + [chunk(None, usage=usage), "data: [DONE]\n\n"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_openai_compatible_round_trip(fake_server, stream):
+    url, requests = fake_server(openai_stream if stream else openai_reply)
+    streamed = []
+    agent = Agent(provider=create_provider("openai", "local-model", base_url=url + "/v1"), stream=stream)
+    agent.events.on_text = streamed.append
 
     assert agent.ask("what is 6*7?") == "The answer is 42."
 
@@ -85,6 +120,7 @@ def test_openai_compatible_round_trip(fake_server):
     assert second["messages"][-2]["tool_calls"][0]["id"] == "call_1"
     assert second["messages"][-1] == {"role": "tool", "tool_call_id": "call_1", "content": "42"}
     assert agent.usage == {"input_tokens": 20, "output_tokens": 10}
+    assert streamed == (["The answer ", "is 42."] if stream else [])
 
 
 def anthropic_reply(body, n):
@@ -101,11 +137,41 @@ def anthropic_reply(body, n):
     return base | {"stop_reason": "end_turn", "content": [{"type": "text", "text": "The answer is 42."}]}
 
 
-def test_anthropic_round_trip(fake_server):
-    url, requests = fake_server(anthropic_reply)
+def anthropic_stream(body, n):
+    """The same two replies as anthropic_reply, as a stream of Server-Sent Events."""
+    assert body["stream"] is True
+    message = anthropic_reply(body, n)
+
+    def event(name, data):
+        return f"event: {name}\ndata: {json.dumps({'type': name, **data})}\n\n"
+
+    events = [event("message_start", {"message": message | {"content": [], "stop_reason": None}})]
+    for i, block in enumerate(message["content"]):
+        if block["type"] == "text":
+            events.append(event("content_block_start", {"index": i, "content_block": {"type": "text", "text": ""}}))
+            for piece in ("The answer ", "is 42."):
+                events.append(event("content_block_delta", {"index": i, "delta": {"type": "text_delta", "text": piece}}))
+        elif block["type"] == "tool_use":
+            events.append(event("content_block_start", {"index": i, "content_block": block | {"input": {}}}))
+            delta = {"type": "input_json_delta", "partial_json": json.dumps(block["input"])}
+            events.append(event("content_block_delta", {"index": i, "delta": delta}))
+        else:  # thinking
+            events.append(event("content_block_start", {"index": i, "content_block": block}))
+        events.append(event("content_block_stop", {"index": i}))
+    events.append(event("message_delta", {"delta": {"stop_reason": message["stop_reason"], "stop_sequence": None},
+                                          "usage": {"output_tokens": 5}}))
+    events.append(event("message_stop", {}))
+    return events
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_anthropic_round_trip(fake_server, stream):
+    url, requests = fake_server(anthropic_stream if stream else anthropic_reply)
     provider = create_provider("anthropic", "claude-opus-5-5", api_key="test-key")
     provider.client = provider.client.with_options(base_url=url)
-    agent = Agent(provider=provider)
+    streamed = []
+    agent = Agent(provider=provider, stream=stream)
+    agent.events.on_text = streamed.append
 
     assert agent.ask("what is 6*7?") == "The answer is 42."
 
@@ -122,3 +188,4 @@ def test_anthropic_round_trip(fake_server):
         "role": "user",
         "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}],
     }
+    assert streamed == (["The answer ", "is 42."] if stream else [])

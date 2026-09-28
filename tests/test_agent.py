@@ -14,7 +14,7 @@ class ScriptedProvider:
         self.replies = list(replies)
         self.calls = []
 
-    def chat(self, system, messages, tools):
+    def chat(self, system, messages, tools, on_text=None):
         self.calls.append(list(messages))
         return self.replies.pop(0)
 
@@ -53,7 +53,7 @@ def test_failed_call_rolls_back_history():
     class Broken:
         name, model = "broken", "x"
 
-        def chat(self, *args):
+        def chat(self, *args, **kwargs):
             raise RuntimeError("server down")
 
     agent = Agent(provider=Broken())

@@ -10,7 +10,7 @@ import json
 
 from openai import OpenAI
 
-from .base import Message, Reply, ToolCall, ToolSpec
+from .base import Message, Reply, TextCallback, ToolCall, ToolSpec
 
 
 class OpenAICompatibleProvider:
@@ -21,7 +21,9 @@ class OpenAICompatibleProvider:
         # Local servers don't check the key, but the SDK insists on having one.
         self.client = OpenAI(base_url=base_url, api_key=api_key or "not-needed")
 
-    def chat(self, system: str, messages: list[Message], tools: list[ToolSpec]) -> Reply:
+    def chat(
+        self, system: str, messages: list[Message], tools: list[ToolSpec], on_text: TextCallback | None = None
+    ) -> Reply:
         request = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}] + [_to_openai(m) for m in messages],
@@ -34,6 +36,8 @@ class OpenAICompatibleProvider:
                 }
                 for t in tools
             ]
+        if on_text:
+            return self._chat_streaming(request, on_text)
 
         response = self.client.chat.completions.create(**request)
         choice = response.choices[0]
@@ -43,13 +47,51 @@ class OpenAICompatibleProvider:
             ToolCall(id=tc.id, name=tc.function.name, arguments=_parse_arguments(tc.function.arguments))
             for tc in (msg.tool_calls or [])
         ]
-        usage = {}
-        if response.usage:
-            usage = {"input_tokens": response.usage.prompt_tokens, "output_tokens": response.usage.completion_tokens}
-
         return Reply(
             message=Message(role="assistant", content=msg.content or "", tool_calls=tool_calls),
             stop_reason=choice.finish_reason or "",
+            usage=_usage(response.usage),
+        )
+
+    def _chat_streaming(self, request: dict, on_text: TextCallback) -> Reply:
+        """Same request, but the reply arrives in small chunks as it is generated.
+
+        Text chunks are passed to on_text right away. Tool calls also arrive in
+        pieces (the name first, then the JSON arguments a few characters at a
+        time), so we glue them back together by their index.
+        """
+        stream = self.client.chat.completions.create(
+            **request, stream=True, stream_options={"include_usage": True}  # Ask for token counts at the end.
+        )
+        text: list[str] = []
+        calls: dict[int, dict[str, str]] = {}
+        finish_reason, usage = "", {}
+
+        for chunk in stream:
+            if chunk.usage:
+                usage = _usage(chunk.usage)
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta.content:
+                text.append(delta.content)
+                on_text(delta.content)
+            for tc in delta.tool_calls or []:
+                call = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                call["id"] = tc.id or call["id"]
+                if tc.function:
+                    call["name"] += tc.function.name or ""
+                    call["arguments"] += tc.function.arguments or ""
+            finish_reason = choice.finish_reason or finish_reason
+
+        tool_calls = [
+            ToolCall(id=c["id"], name=c["name"], arguments=_parse_arguments(c["arguments"]))
+            for _, c in sorted(calls.items())
+        ]
+        return Reply(
+            message=Message(role="assistant", content="".join(text), tool_calls=tool_calls),
+            stop_reason=finish_reason,
             usage=usage,
         )
 
@@ -84,3 +126,9 @@ def _parse_arguments(raw: str | None) -> dict:
         # Hand the broken text to the tool layer, which reports it back to the model.
         return {"__invalid_json__": raw}
     return value if isinstance(value, dict) else {"__invalid_json__": raw}
+
+
+def _usage(usage) -> dict[str, int]:
+    if not usage:
+        return {}
+    return {"input_tokens": usage.prompt_tokens, "output_tokens": usage.completion_tokens}
