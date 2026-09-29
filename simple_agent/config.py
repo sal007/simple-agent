@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .agent import DEFAULT_SYSTEM_PROMPT
 from .context import ContextManager
+from .mcp import McpServerConfig
 
 # Sensible starting points for each provider. LM Studio is the default because
 # it runs locally and needs no account.
@@ -33,6 +34,7 @@ class Settings:
     trace_dir: str = "traces"
     sessions_dir: str = "sessions"
     context: ContextManager | None = field(default_factory=ContextManager)
+    mcp_servers: list[McpServerConfig] = field(default_factory=list)
 
 
 def load_file(path: str | None) -> dict:
@@ -74,6 +76,7 @@ def resolve(
         trace_dir=file_config.get("trace_dir", "traces"),
         sessions_dir=file_config.get("sessions_dir", "sessions"),
         context=_context(file_config.get("context", {})),
+        mcp_servers=_mcp_servers(file_config.get("mcp_servers", {})),
     )
 
 
@@ -86,3 +89,17 @@ def _context(section: dict) -> ContextManager | None:
     if unknown:
         raise ValueError(f"Unknown [context] setting(s): {', '.join(sorted(unknown))}")
     return ContextManager(**{k: v for k, v in section.items() if k in known})
+
+
+def _mcp_servers(section: dict) -> list[McpServerConfig]:
+    """The [mcp_servers.<name>] tables, one per server."""
+    servers = []
+    for name, table in section.items():
+        if "command" not in table:
+            raise ValueError(f"[mcp_servers.{name}] needs a command")
+        known = McpServerConfig.__dataclass_fields__
+        unknown = set(table) - set(known)
+        if unknown:
+            raise ValueError(f"Unknown [mcp_servers.{name}] setting(s): {', '.join(sorted(unknown))}")
+        servers.append(McpServerConfig(name=name, **table))
+    return servers

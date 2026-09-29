@@ -44,3 +44,11 @@ keep_tool_results = 3
 compact = true
 keep_recent_turns = 2
 # enabled = false   # turn context management off entirely
+
+# MCP servers: each one adds its tools next to the built-in ones (see "MCP servers" in the README).
+# Their tools ask y/N before every call unless the server has trusted = true.
+# [mcp_servers.files]
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+# trusted = false
+# env = { SOME_TOKEN = "..." }
