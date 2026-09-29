@@ -3,22 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import sys
 
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
+from . import sessions
 from .providers import create_provider
 from .trace import Tracer
 
 HELP = """Commands:
-  /help     show this help
-  /tools    list the tools the agent can use
-  /history  show the conversation so far
-  /usage    show tokens used this session
-  /reset    start a new conversation
-  /exit     quit (Ctrl+D also works)"""
+  /help          show this help
+  /tools         list the tools the agent can use
+  /history       show the conversation so far
+  /usage         show tokens used this session
+  /reset         start a new conversation
+  /save [name]   save the conversation (default name: the current time)
+  /load <name>   load a saved conversation
+  /sessions      list saved conversations
+  /exit          quit (Ctrl+D also works). The conversation is saved as "last"."""
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -29,6 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", help="Path to a config.toml (default: ./config.toml, then ~/.config/simple-agent/).")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show tool results, not just tool calls.")
     parser.add_argument("--trace", action="store_true", default=None, help="Print every step of the agent loop and save it to a log file.")
+    parser.add_argument("--resume", metavar="NAME", help='Continue a saved conversation, e.g. --resume last.')
     parser.add_argument("--no-stream", action="store_true", help="Wait for whole replies instead of streaming them.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -63,6 +69,14 @@ def main(argv: list[str] | None = None) -> int:
         agent.events = tracer.events()
         agent.stream = False
 
+    if args.resume:
+        try:
+            data = sessions.load(agent, sessions.session_path(settings.sessions_dir, args.resume))
+        except (OSError, ValueError) as exc:
+            print(f"Could not resume {args.resume!r}: {exc}", file=sys.stderr)
+            return 1
+        print(f"(resumed {args.resume}: {len(agent.history)} messages, saved {data['saved_at']})")
+
     if args.prompt:  # One-shot mode: simple-agent "what time is it?"
         return 0 if _ask(agent, printer, " ".join(args.prompt)) else 1
 
@@ -75,14 +89,19 @@ def main(argv: list[str] | None = None) -> int:
             line = input("you> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            return 0
+            break
         if not line:
             continue
         if line.startswith("/"):
-            if _command(agent, line) == "exit":
-                return 0
+            if _command(agent, line, settings.sessions_dir) == "exit":
+                break
             continue
         _ask(agent, printer, line)
+
+    if agent.history:  # So `--resume last` always picks up where you left off.
+        path = sessions.save(agent, sessions.session_path(settings.sessions_dir, "last"))
+        print(f"(conversation saved to {path})")
+    return 0
 
 
 def _ask(agent: Agent, printer: Printer, text: str) -> bool:
@@ -106,8 +125,9 @@ def _ask(agent: Agent, printer: Printer, text: str) -> bool:
     return True
 
 
-def _command(agent: Agent, line: str) -> str | None:
-    cmd = line.split()[0].lower()
+def _command(agent: Agent, line: str, sessions_dir: str = "sessions") -> str | None:
+    cmd, *rest = line.split(maxsplit=1)
+    cmd = cmd.lower()
     if cmd in ("/exit", "/quit"):
         return "exit"
     if cmd == "/help":
@@ -128,6 +148,29 @@ def _command(agent: Agent, line: str) -> str | None:
     elif cmd == "/reset":
         agent.reset()
         print("  (conversation cleared)")
+    elif cmd == "/save":
+        name = rest[0].strip() if rest else _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            print(f"  (saved to {sessions.save(agent, sessions.session_path(sessions_dir, name))})")
+        except (OSError, ValueError) as exc:
+            print(f"  Could not save: {exc}")
+    elif cmd == "/load":
+        if not rest:
+            print("  Usage: /load <name>   (see /sessions)")
+            return None
+        try:
+            data = sessions.load(agent, sessions.session_path(sessions_dir, rest[0].strip()))
+        except (OSError, ValueError) as exc:
+            print(f"  Could not load: {exc}")
+            return None
+        print(f"  (loaded {len(agent.history)} messages, saved {data['saved_at']} with {data['provider']} · {data['model']})")
+    elif cmd == "/sessions":
+        found = sessions.list_sessions(sessions_dir)
+        if not found:
+            print(f"  (no saved sessions in {sessions_dir}/)")
+        for name, info in found:
+            print(f"  {name}: {info['messages']} messages, {info['saved_at']}, {info['model']}")
+            print(f"      {_short(info['first_message'], 80)}")
     else:
         print(f"  Unknown command {cmd}. Type /help.")
     return None

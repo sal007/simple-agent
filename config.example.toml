@@ -17,6 +17,9 @@ stream = true
 trace = false
 trace_dir = "traces"
 
+# Where /save, /load and --resume keep conversations.
+sessions_dir = "sessions"
+
 [providers.openai]
 # LM Studio's local server. Ollama is http://localhost:11434/v1, OpenAI is https://api.openai.com/v1.
 base_url = "http://localhost:1234/v1"
