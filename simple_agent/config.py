@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .agent import DEFAULT_SYSTEM_PROMPT
+from .context import ContextManager
 
 # Sensible starting points for each provider. LM Studio is the default because
 # it runs locally and needs no account.
@@ -31,6 +32,7 @@ class Settings:
     trace: bool = False
     trace_dir: str = "traces"
     sessions_dir: str = "sessions"
+    context: ContextManager | None = field(default_factory=ContextManager)
 
 
 def load_file(path: str | None) -> dict:
@@ -71,4 +73,16 @@ def resolve(
         trace=bool(file_config.get("trace", False)),
         trace_dir=file_config.get("trace_dir", "traces"),
         sessions_dir=file_config.get("sessions_dir", "sessions"),
+        context=_context(file_config.get("context", {})),
     )
+
+
+def _context(section: dict) -> ContextManager | None:
+    """The [context] table. enabled = false turns context management off."""
+    if not section.get("enabled", True):
+        return None
+    known = ContextManager.__dataclass_fields__
+    unknown = set(section) - set(known) - {"enabled"}
+    if unknown:
+        raise ValueError(f"Unknown [context] setting(s): {', '.join(sorted(unknown))}")
+    return ContextManager(**{k: v for k, v in section.items() if k in known})

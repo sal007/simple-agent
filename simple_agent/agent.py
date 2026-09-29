@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .context import ContextManager
 from .providers.base import Message, Provider, Reply, ToolCall
 from .tools import ToolRegistry, default_tools
 
@@ -45,6 +46,9 @@ class AgentEvents:
     on_reset: Callable[[], None] = lambda: None
     # Each piece of reply text as it streams in (only when Agent.stream is on).
     on_text: Callable[[str], None] = lambda text: None
+    # The context manager changed the history: kind is "cleared", "compacting",
+    # "compacted" or "compact_failed"; details holds the numbers (see context.py).
+    on_context: Callable[[str, dict], None] = lambda kind, details: None
 
 
 @dataclass
@@ -57,9 +61,13 @@ class Agent:
     history: list[Message] = field(default_factory=list)
     events: AgentEvents = field(default_factory=AgentEvents)
     usage: dict[str, int] = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
+    # Keeps the history under a token limit (see context.py). None = never trim it.
+    context: ContextManager | None = None
 
     def ask(self, user_input: str) -> str:
         """Run one full turn: the user's message in, the model's final answer out."""
+        if self.context:
+            self.context.before_turn(self)  # May clear old tool results or summarize old turns.
         start = len(self.history)
         self.history.append(Message(role="user", content=user_input))
         self.events.on_turn_start(user_input)
@@ -76,6 +84,8 @@ class Agent:
 
     def _loop(self) -> str:
         for step in range(1, self.max_steps + 1):
+            if self.context:
+                self.context.before_model_call(self)  # Tool results can pile up within one turn.
             self.events.on_model_request(step, self.history)
             on_text = self.events.on_text if self.stream else None
             reply = self.provider.chat(self.system_prompt, self.history, self.tools.specs(), on_text=on_text)

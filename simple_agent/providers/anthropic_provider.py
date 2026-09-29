@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 import anthropic
 
 from .base import Message, Reply, TextCallback, ToolCall, ToolSpec
+
+
+# Models that support adaptive thinking (Haiku 4.5 and older models don't).
+ADAPTIVE_THINKING = re.compile(r"claude-(fable|mythos|opus-5|sonnet-5|opus-4-[678]|sonnet-4-6)")
 
 
 class AnthropicProvider:
@@ -30,6 +36,13 @@ class AnthropicProvider:
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
         )
+        if ADAPTIVE_THINKING.match(self.model):
+            # Claude's thinking blocks are tied to the history that came before
+            # them. Context management (context.py) edits that history, which
+            # would make the API reject the request. drop_block tells it to
+            # quietly drop the thinking blocks that no longer match instead.
+            request["thinking"] = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+            request["betas"].append("thinking-binding-controls-2026-08-01")
         if on_text:
             # The SDK's stream helper hands us text as it arrives and still
             # assembles the complete message for us at the end.

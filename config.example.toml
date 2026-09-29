@@ -31,3 +31,16 @@ api_key = "lm-studio"
 [providers.anthropic]
 model = "claude-opus-5-5"
 # The key is read from the ANTHROPIC_API_KEY environment variable.
+
+[context]
+# Keep the conversation under a token limit (see "Context management" in the README).
+# Set max_tokens a bit below the model's context length (LM Studio: the "Context Length"
+# you loaded the model with; 4096 is a common default there).
+max_tokens = 8000
+# 1. Replace old tool results with a short placeholder, keeping the newest few.
+clear_tool_results = true
+keep_tool_results = 3
+# 2. If still too big, summarize older turns, keeping the last few word for word.
+compact = true
+keep_recent_turns = 2
+# enabled = false   # turn context management off entirely
