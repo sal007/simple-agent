@@ -14,7 +14,7 @@ class ScriptedProvider:
     def __init__(self, replies):
         self.replies = list(replies)
 
-    def chat(self, system, messages, tools):
+    def chat(self, system, messages, tools, on_text=None):
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply

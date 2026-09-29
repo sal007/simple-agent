@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import anthropic
 
-from .base import Message, Reply, ToolCall, ToolSpec
+from .base import Message, Reply, TextCallback, ToolCall, ToolSpec
 
 
 class AnthropicProvider:
@@ -16,8 +16,10 @@ class AnthropicProvider:
         # With api_key=None the SDK reads ANTHROPIC_API_KEY from the environment.
         self.client = anthropic.Anthropic(api_key=api_key)
 
-    def chat(self, system: str, messages: list[Message], tools: list[ToolSpec]) -> Reply:
-        response = self.client.beta.messages.create(
+    def chat(
+        self, system: str, messages: list[Message], tools: list[ToolSpec], on_text: TextCallback | None = None
+    ) -> Reply:
+        request = dict(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
@@ -28,6 +30,15 @@ class AnthropicProvider:
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
         )
+        if on_text:
+            # The SDK's stream helper hands us text as it arrives and still
+            # assembles the complete message for us at the end.
+            with self.client.beta.messages.stream(**request) as stream:
+                for text in stream.text_stream:
+                    on_text(text)
+                response = stream.get_final_message()
+        else:
+            response = self.client.beta.messages.create(**request)
 
         text = "".join(block.text for block in response.content if block.type == "text")
         tool_calls = [

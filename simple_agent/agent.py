@@ -43,6 +43,8 @@ class AgentEvents:
     on_turn_end: Callable[[str], None] = lambda answer: None
     on_error: Callable[[BaseException], None] = lambda error: None
     on_reset: Callable[[], None] = lambda: None
+    # Each piece of reply text as it streams in (only when Agent.stream is on).
+    on_text: Callable[[str], None] = lambda text: None
 
 
 @dataclass
@@ -51,6 +53,7 @@ class Agent:
     tools: ToolRegistry = default_tools
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     max_steps: int = 10  # Most model calls per user message, so a confused model can't loop forever.
+    stream: bool = True  # Show replies as they are generated instead of all at once.
     history: list[Message] = field(default_factory=list)
     events: AgentEvents = field(default_factory=AgentEvents)
     usage: dict[str, int] = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
@@ -74,7 +77,8 @@ class Agent:
     def _loop(self) -> str:
         for step in range(1, self.max_steps + 1):
             self.events.on_model_request(step, self.history)
-            reply = self.provider.chat(self.system_prompt, self.history, self.tools.specs())
+            on_text = self.events.on_text if self.stream else None
+            reply = self.provider.chat(self.system_prompt, self.history, self.tools.specs(), on_text=on_text)
             self.events.on_model_reply(step, reply)
             for key, value in reply.usage.items():
                 self.usage[key] = self.usage.get(key, 0) + value

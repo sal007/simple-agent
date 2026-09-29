@@ -29,6 +29,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", help="Path to a config.toml (default: ./config.toml, then ~/.config/simple-agent/).")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show tool results, not just tool calls.")
     parser.add_argument("--trace", action="store_true", default=None, help="Print every step of the agent loop and save it to a log file.")
+    parser.add_argument("--no-stream", action="store_true", help="Wait for whole replies instead of streaming them.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("prompt", nargs="*", help="Ask one question and exit instead of starting the REPL.")
@@ -44,21 +45,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Setup error: {exc}", file=sys.stderr)
         return 1
 
+    printer = Printer(args.verbose)
     agent = Agent(
         provider=provider,
         system_prompt=settings.system_prompt,
         max_steps=settings.max_steps,
-        events=_printing_events(args.verbose),
+        stream=settings.stream and not args.no_stream,
+        events=printer.events(),
     )
     trace = settings.trace if args.trace is None else args.trace
     if trace:
-        # The tracer prints tool calls itself, so it replaces the normal printing.
+        # The tracer prints each step itself (whole replies, not streamed),
+        # so it replaces the normal printing.
         tracer = Tracer(args.trace_dir or settings.trace_dir)
         tracer.start(provider, agent.system_prompt, agent.tools.specs())
         agent.events = tracer.events()
+        agent.stream = False
 
     if args.prompt:  # One-shot mode: simple-agent "what time is it?"
-        return 0 if _ask(agent, " ".join(args.prompt)) else 1
+        return 0 if _ask(agent, printer, " ".join(args.prompt)) else 1
 
     where = f" at {settings.base_url}" if settings.provider == "openai" else ""
     print(f"simple-agent {__version__} · {settings.provider} · {settings.model}{where}")
@@ -76,21 +81,27 @@ def main(argv: list[str] | None = None) -> int:
             if _command(agent, line) == "exit":
                 return 0
             continue
-        _ask(agent, line)
+        _ask(agent, printer, line)
 
 
-def _ask(agent: Agent, text: str) -> bool:
+def _ask(agent: Agent, printer: Printer, text: str) -> bool:
     try:
         answer = agent.ask(text)
     except KeyboardInterrupt:
-        print("\n(interrupted)")
+        printer.end_line()
+        print("(interrupted)")
         return False
     except Exception as exc:  # noqa: BLE001 - show API/network errors without crashing the REPL
+        printer.end_line()
         print(f"error> {type(exc).__name__}: {exc}", file=sys.stderr)
         if type(exc).__name__ == "APIConnectionError":  # Same class name in both SDKs.
             print("       Is the server running and is --base-url right? (LM Studio: Developer tab > Start Server)", file=sys.stderr)
         return False
-    print(f"agent> {answer}\n")
+    printer.end_line()
+    if printer.streamed:
+        print()  # The answer is already on screen; just leave a blank line.
+    else:
+        print(f"agent> {answer}\n")
     return True
 
 
@@ -120,15 +131,44 @@ def _command(agent: Agent, line: str) -> str | None:
     return None
 
 
-def _printing_events(verbose: bool) -> AgentEvents:
-    def on_call(call):
+class Printer:
+    """Prints the agent's activity: streamed text as it arrives, and tool calls."""
+
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+        self.mid_line = False  # True while a streamed reply is still being printed.
+        self.streamed = False  # Whether any text was streamed during this turn.
+
+    def events(self) -> AgentEvents:
+        return AgentEvents(
+            on_turn_start=self.turn_start,
+            on_text=self.text,
+            on_tool_call=self.tool_call,
+            on_tool_result=self.tool_result,
+        )
+
+    def turn_start(self, user_input: str) -> None:
+        self.streamed = False
+
+    def text(self, chunk: str) -> None:
+        if not self.mid_line:
+            print("agent> ", end="")
+            self.mid_line = True
+        self.streamed = True
+        print(chunk, end="", flush=True)
+
+    def end_line(self) -> None:
+        if self.mid_line:
+            print()
+            self.mid_line = False
+
+    def tool_call(self, call) -> None:
+        self.end_line()
         print(f"  tool> {call.name}({json.dumps(call.arguments)})")
 
-    def on_result(call, result):
-        if verbose:
+    def tool_result(self, call, result: str) -> None:
+        if self.verbose:
             print(f"  result> {_short(result, 300)}")
-
-    return AgentEvents(on_tool_call=on_call, on_tool_result=on_result)
 
 
 def _short(text: str, limit: int = 120) -> str:

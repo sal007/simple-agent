@@ -69,7 +69,9 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 | `/reset`   | start a new conversation              |
 | `/exit`    | quit (Ctrl+D also works)              |
 
-Add `-v` to also see what each tool returned. Pass a question as arguments to
+Replies stream in as the model writes them. Add `--no-stream` to wait for whole
+replies instead (useful if a server doesn't support streaming). Add `-v` to also
+see what each tool returned. Pass a question as arguments to
 ask once and exit: `simple-agent "what files are in this folder?"`.
 
 ### Trace mode
@@ -170,6 +172,22 @@ The Anthropic provider also turns on server-side fallbacks, so if a safety
 classifier declines a request the API retries it on a suitable fallback model
 instead of just refusing.
 
+### Streaming
+
+Without streaming, a request returns the whole reply at once, so you stare at a
+blank line until the model is done. With streaming the server sends the reply
+in small chunks as it's generated, and `Agent` passes each text chunk to an
+`on_text` callback that the CLI prints straight away.
+
+Each provider has both paths side by side, so you can compare them. Text is
+easy to stream, but tool calls arrive in pieces too: the OpenAI-style stream
+sends the tool name first and then the JSON arguments a few characters at a
+time, and `_chat_streaming()` in `openai_compat.py` glues them back together.
+The Anthropic SDK's `messages.stream()` helper does that assembly for you and
+hands back the complete message at the end.
+
+Trace mode turns streaming off so each step prints as one complete reply.
+
 ### Tools
 
 A tool is a normal Python function plus a description and a JSON Schema for its
@@ -207,7 +225,7 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
 
 **Ideas for research and learning**, roughly in order of difficulty:
 
-- Stream tokens as they arrive instead of waiting for the full reply.
+- Measure time to first token with streaming on, and compare models.
 - Save and load conversations (the history is just a list of dataclasses).
 - Ask for confirmation before running a tool, then add a `write_file` or
   `run_shell` tool behind that gate.

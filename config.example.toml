@@ -10,6 +10,9 @@ provider = "openai"
 # Safety net: the most model calls the agent makes for a single user message.
 max_steps = 10
 
+# Show replies as they are generated (same as leaving out --no-stream).
+stream = true
+
 # Trace mode: print every step of the agent loop and save it as JSONL (same as --trace).
 trace = false
 trace_dir = "traces"

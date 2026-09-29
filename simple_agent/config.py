@@ -27,6 +27,7 @@ class Settings:
     api_key: str | None
     system_prompt: str
     max_steps: int
+    stream: bool = True
     trace: bool = False
     trace_dir: str = "traces"
 
@@ -65,6 +66,7 @@ def resolve(
         api_key=os.environ.get(defaults["api_key_env"]) or section.get("api_key"),
         system_prompt=file_config.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         max_steps=int(file_config.get("max_steps", 10)),
+        stream=bool(file_config.get("stream", True)),
         trace=bool(file_config.get("trace", False)),
         trace_dir=file_config.get("trace_dir", "traces"),
     )
