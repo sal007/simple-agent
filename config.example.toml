@@ -52,3 +52,6 @@ keep_recent_turns = 2
 # args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 # trusted = false
 # env = { SOME_TOKEN = "..." }
+
+# Folders to load plugin tools from (see "Plugins" in the README).
+# plugin_dirs = ["plugins", "~/.config/simple-agent/plugins"]

@@ -11,6 +11,7 @@ from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
 from . import mcp, sessions
+from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
 from .tools import default_tools
@@ -19,6 +20,8 @@ from .trace import Tracer, describe_context
 HELP = """Commands:
   /help          show this help
   /tools         list the tools the agent can use
+  /plugins       list the plugin files and the tools they added
+  /reload        load the plugin files again (after editing one)
   /history       show the conversation so far
   /usage         show tokens used this session
   /reset         start a new conversation
@@ -40,6 +43,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trace", action="store_true", default=None, help="Print every step of the agent loop and save it to a log file.")
     parser.add_argument("--resume", metavar="NAME", help='Continue a saved conversation, e.g. --resume last.')
     parser.add_argument("--no-stream", action="store_true", help="Wait for whole replies instead of streaming them.")
+    parser.add_argument("--no-plugins", action="store_true", help="Don't load tools from the plugin folders.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -74,14 +78,19 @@ def main(argv: list[str] | None = None) -> int:
         for message in messages:
             print(f"({message})")
     agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
+    # Plugins go on top, from a loader that can load them again for /reload.
+    loader = PluginLoader([] if args.no_plugins else settings.plugin_dirs, agent.tools)
+    agent.tools = loader.load()
+    for line in loader.describe():
+        print(f"({line})")
     try:
-        return _run(args, settings, agent, printer, provider)
+        return _run(args, settings, agent, printer, provider, loader)
     finally:
         for server in servers:
             server.close()
 
 
-def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, provider) -> int:
+def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, provider, loader: PluginLoader) -> int:
     """Everything after setup: trace mode, --resume, then one question or the REPL."""
     trace = settings.trace if args.trace is None else args.trace
     if trace:
@@ -116,7 +125,7 @@ def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, pro
         if not line:
             continue
         if line.startswith("/"):
-            if _command(agent, line, settings.sessions_dir) == "exit":
+            if _command(agent, line, settings.sessions_dir, loader) == "exit":
                 break
             continue
         _ask(agent, printer, line)
@@ -148,7 +157,7 @@ def _ask(agent: Agent, printer: Printer, text: str) -> bool:
     return True
 
 
-def _command(agent: Agent, line: str, sessions_dir: str = "sessions") -> str | None:
+def _command(agent: Agent, line: str, sessions_dir: str = "sessions", loader: PluginLoader | None = None) -> str | None:
     cmd, *rest = line.split(maxsplit=1)
     cmd = cmd.lower()
     if cmd in ("/exit", "/quit"):
@@ -159,6 +168,20 @@ def _command(agent: Agent, line: str, sessions_dir: str = "sessions") -> str | N
         for spec in agent.tools.specs():
             note = " (asks first)" if agent.tools.asks_first(spec.name) else ""
             print(f"  {spec.name}{note}: {spec.description}")
+    elif cmd == "/plugins":
+        lines = loader.describe() if loader else []
+        if not lines:
+            folders = ", ".join(loader.dirs) if loader and loader.dirs else "none (--no-plugins)"
+            print(f"  (no plugins loaded; plugin folders: {folders})")
+        for line in lines:
+            print(f"  {line}")
+    elif cmd == "/reload":
+        if loader is None:
+            print("  (plugins are not enabled)")
+            return None
+        agent.tools = loader.load()
+        for line in loader.describe() or ["(no plugins found)"]:
+            print(f"  {line}")
     elif cmd == "/history":
         for m in agent.history:
             if m.role == "tool":

@@ -36,6 +36,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import __version__
 from .providers.base import ToolSpec
 from .tools import ToolRegistry
 
@@ -94,7 +95,7 @@ class McpServer:
             {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},  # We only use tools, so we offer the server nothing extra.
-                "clientInfo": {"name": "simple-agent", "version": "0.1"},
+                "clientInfo": {"name": "simple-agent", "version": __version__},
             },
         )
         self.server_info = result.get("serverInfo", {})

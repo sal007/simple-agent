@@ -18,6 +18,9 @@ PROVIDER_DEFAULTS = {
     "anthropic": {"base_url": None, "model": "claude-opus-5-5", "api_key_env": "ANTHROPIC_API_KEY"},
 }
 
+# Folders searched for plugin .py files (see plugins.py).
+DEFAULT_PLUGIN_DIRS = ["plugins", "~/.config/simple-agent/plugins"]
+
 CONFIG_LOCATIONS = [Path("config.toml"), Path.home() / ".config" / "simple-agent" / "config.toml"]
 
 
@@ -35,6 +38,7 @@ class Settings:
     sessions_dir: str = "sessions"
     context: ContextManager | None = field(default_factory=ContextManager)
     mcp_servers: list[McpServerConfig] = field(default_factory=list)
+    plugin_dirs: list[str] = field(default_factory=lambda: list(DEFAULT_PLUGIN_DIRS))
 
 
 def load_file(path: str | None) -> dict:
@@ -77,6 +81,7 @@ def resolve(
         sessions_dir=file_config.get("sessions_dir", "sessions"),
         context=_context(file_config.get("context", {})),
         mcp_servers=_mcp_servers(file_config.get("mcp_servers", {})),
+        plugin_dirs=list(file_config.get("plugin_dirs", DEFAULT_PLUGIN_DIRS)),
     )
 
 

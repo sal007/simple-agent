@@ -61,6 +61,10 @@ class ToolRegistry:
         """Register a tool without the decorator (mcp.py uses this for server tools)."""
         self._tools[spec.name] = Tool(spec, func, confirm)
 
+    def update(self, other: ToolRegistry) -> None:
+        """Add all of another registry's tools, replacing any with the same name."""
+        self._tools.update(other._tools)
+
     def copy(self) -> ToolRegistry:
         """A new registry with the same tools, to add more to without changing this one."""
         new = ToolRegistry()
