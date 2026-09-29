@@ -179,6 +179,9 @@ def test_anthropic_round_trip(fake_server, stream):
     assert requests[0]["path"] == "/v1/messages?beta=true"
     assert "server-side-fallback-2026-07-01" in requests[0]["headers"]["anthropic-beta"]
     assert first["fallbacks"] == "default"
+    # Edited history (context management) drops stale thinking blocks instead of failing.
+    assert "thinking-binding-controls-2026-08-01" in requests[0]["headers"]["anthropic-beta"]
+    assert first["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
     calculator = next(t for t in first["tools"] if t["name"] == "calculator")
     assert calculator["input_schema"]["required"] == ["expression"]
     # The assistant turn is replayed exactly, thinking block included...

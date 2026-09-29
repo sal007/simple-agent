@@ -63,6 +63,7 @@ class Tracer:
             on_turn_end=self.turn_end,
             on_error=self.error,
             on_reset=self.reset,
+            on_context=self.context,
         )
 
     # --- the callbacks, in the order the agent calls them ---------------------
@@ -116,6 +117,14 @@ class Tracer:
         self._sent = self._turn_base = 0
         self._log("reset")
 
+    def context(self, kind: str, details: dict) -> None:
+        self._print(f"context: {describe_context(kind, details)}")
+        self._log("context", kind=kind, **details)
+        if kind in ("cleared", "compacted"):
+            # Earlier messages changed, so list the whole history again on the
+            # next request: that is exactly what the model will now see.
+            self._sent = 0
+
     # --- helpers --------------------------------------------------------------
 
     def _print(self, text: str) -> None:
@@ -127,6 +136,20 @@ class Tracer:
         record = {"time": _dt.datetime.now().astimezone().isoformat(timespec="milliseconds"), "event": event, **fields}
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+
+def describe_context(kind: str, details: dict) -> str:
+    """One line about a context-management event (shared with the CLI)."""
+    before, after = details.get("tokens_before"), details.get("tokens_after")
+    if kind == "cleared":
+        return f"cleared {_count(details['tool_results'], 'old tool result')} (~{before} -> ~{after} tokens)"
+    if kind == "compacting":
+        return f"history is ~{before} tokens; summarizing {_count(details['messages'], 'older message')}..."
+    if kind == "compacted":
+        return f"replaced {_count(details['messages'], 'older message')} with a summary (~{before} -> ~{after} tokens)"
+    if kind == "compact_failed":
+        return f"could not summarize, keeping the full history ({details['error']})"
+    return f"{kind} {details}"
 
 
 def _message_dict(m: Message) -> dict:

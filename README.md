@@ -67,6 +67,8 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 | `/history`     | show the conversation so far      |
 | `/usage`       | tokens used this session          |
 | `/reset`       | start a new conversation          |
+| `/context`     | how big the conversation is       |
+| `/compact`     | summarize older turns now         |
 | `/save [name]` | save the conversation             |
 | `/load <name>` | load a saved conversation         |
 | `/sessions`    | list saved conversations          |
@@ -127,7 +129,7 @@ Each run is also saved to `traces/` as a JSONL file (one JSON object per line),
 named after the time, provider and model. The events are `run_start` (system
 prompt and tools), `turn_start`, `request` (only the messages that are new since
 the last request), `reply` (with `usage`, `seconds` and `stop_reason`), `tool`,
-`turn_end`, `error` and `reset`. That makes it easy to compare models on the
+`turn_end`, `error`, `reset` and `context`. That makes it easy to compare models on the
 same questions, for example total tokens per run:
 
 ```bash
@@ -136,12 +138,61 @@ python -c "import json,sys; print(sum(e['usage'].get('output_tokens',0) for e in
 
 Set `trace = true` in `config.toml` to have it on all the time.
 
+### Context management
+
+Every request resends the whole conversation, so it keeps growing, and tool
+results (a whole file, a long directory listing) make it grow fast. Once it no
+longer fits the model's context window the request fails, or a local server
+quietly cuts off the start of the conversation. `context.py` keeps the history
+under a limit (`max_tokens`, 8000 by default) in two ways, cheapest first:
+
+1. **Clear old tool results.** Before each model call, if the history is over
+   the limit, every tool result except the newest 3 is replaced with a
+   placeholder like `[old tool result cleared to save space: it was 9412
+   characters]`. The model still sees which tools it called and with what
+   arguments, so it can call one again if it needs the output back.
+2. **Compact (summarize).** At the start of a turn, if the history is still
+   over the limit, the model is asked to summarize everything except the last 2
+   turns. Those older messages are replaced by the summary. This never happens
+   in the middle of a turn, so a tool call is never split from its result.
+
+You see it when it happens:
+
+```
+you> and what about the tests folder?
+  context> cleared 5 old tool results (~12800 -> ~8410 tokens)
+  context> history is ~8410 tokens; summarizing 14 older messages...
+  context> replaced 14 older messages with a summary (~8410 -> ~1900 tokens)
+```
+
+`/context` shows the current size and settings, `/compact` summarizes right
+away, and `-v` also prints the summary. Set the limit a little below the
+context length you loaded the model with (in LM Studio that is the "Context
+Length" setting, often 4096 by default) in the `[context]` section of
+`config.toml`, where each strategy can also be turned off on its own.
+
+The sizes are estimates (about 4 characters per token), which is enough to
+decide when to act; the real token counts are in `/usage` and the trace.
+
+**To compare the two strategies**, run the same long task with `--trace` and
+different settings, for example `compact = false` (clearing only) against
+`clear_tool_results = false` (summaries only), with a small `max_tokens` so
+they kick in early. The trace shows each `context` event, and after one the
+next request lists the whole history again, so you see exactly what the model
+was left with. Things to look at: input tokens per request, whether the model
+had to re-read files it had cleared, and what the summaries kept or lost.
+
+With Claude, editing earlier history would normally break its saved thinking
+blocks (the API rejects a request whose history changed underneath them), so
+the Anthropic provider asks the API to drop the thinking blocks that no longer
+match instead (`block_binding` with `drop_block`).
+
 ### Config file
 
 Instead of flags, copy `config.example.toml` to `config.toml` (in the folder you
 run from, or `~/.config/simple-agent/config.toml`) and edit it. You can set the
-provider, model, server URL, system prompt, step limit, streaming, trace mode
-and where traces and sessions are stored there. Flags always
+provider, model, server URL, system prompt, step limit, streaming, trace mode,
+context management and where traces and sessions are stored there. Flags always
 win over the file. API keys are read from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 so they don't have to live in a file.
 
@@ -161,6 +212,7 @@ so they don't have to live in a file.
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
+| [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
 | [`simple_agent/trace.py`](simple_agent/trace.py) | Trace mode: prints each loop step and writes the JSONL log. |
 | [`simple_agent/config.py`](simple_agent/config.py) | Merges defaults, `config.toml` and CLI flags. |
 | [`simple_agent/cli.py`](simple_agent/cli.py) | The terminal REPL. |
@@ -275,7 +327,8 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
 
 - Measure time to first token with streaming on, and compare models.
 - Remember "always allow" answers per tool for the rest of a session.
-- Trim or summarize old history when the conversation gets long.
+- Try other context strategies in `context.py`: a sliding window that drops
+  the oldest turns, or a memory file the agent writes notes to.
 - Write a small script that reads two trace logs and compares how different
   models used the same tools.
 - Add a web search tool, or connect MCP servers as tool sources.

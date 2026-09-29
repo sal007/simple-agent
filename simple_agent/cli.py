@@ -12,7 +12,8 @@ from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
 from . import sessions
 from .providers import create_provider
-from .trace import Tracer
+from .context import CLEARED_PREFIX
+from .trace import Tracer, describe_context
 
 HELP = """Commands:
   /help          show this help
@@ -20,6 +21,8 @@ HELP = """Commands:
   /history       show the conversation so far
   /usage         show tokens used this session
   /reset         start a new conversation
+  /context       show how big the conversation is and the context settings
+  /compact       summarize older turns now (keeps the last few word for word)
   /save [name]   save the conversation (default name: the current time)
   /load <name>   load a saved conversation
   /sessions      list saved conversations
@@ -58,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=settings.max_steps,
         stream=settings.stream and not args.no_stream,
         events=printer.events(),
+        context=settings.context,
     )
     agent.tools.approve = _confirm  # write_file and run_shell ask here before running.
     trace = settings.trace if args.trace is None else args.trace
@@ -145,6 +149,22 @@ def _command(agent: Agent, line: str, sessions_dir: str = "sessions") -> str | N
                 print(f"  [{m.role}] {_short(m.content)}{calls}")
     elif cmd == "/usage":
         print(f"  input tokens: {agent.usage.get('input_tokens', 0)}, output tokens: {agent.usage.get('output_tokens', 0)}")
+    elif cmd == "/context":
+        ctx = agent.context
+        tool_results = [m for m in agent.history if m.role == "tool"]
+        cleared = sum(m.content.startswith(CLEARED_PREFIX) for m in tool_results)
+        print(f"  {len(agent.history)} messages, {len(tool_results)} tool results ({cleared} cleared)")
+        if ctx is None:
+            print("  context management is off")
+        else:
+            print(f"  about {ctx.estimate(agent)} tokens (estimated) of a {ctx.max_tokens} token limit")
+            print(f"  clear old tool results: {'on' if ctx.clear_tool_results else 'off'} (keeps the newest {ctx.keep_tool_results})")
+            print(f"  compact older turns: {'on' if ctx.compact else 'off'} (keeps the last {ctx.keep_recent_turns} turns)")
+    elif cmd == "/compact":
+        if agent.context is None:
+            print("  context management is off")
+        elif not agent.context.compact_history(agent):
+            print("  (nothing to compact yet)")
     elif cmd == "/reset":
         agent.reset()
         print("  (conversation cleared)")
@@ -207,6 +227,7 @@ class Printer:
             on_text=self.text,
             on_tool_call=self.tool_call,
             on_tool_result=self.tool_result,
+            on_context=self.context,
         )
 
     def turn_start(self, user_input: str) -> None:
@@ -231,6 +252,13 @@ class Printer:
     def tool_result(self, call, result: str) -> None:
         if self.verbose:
             print(f"  result> {_short(result, 300)}")
+
+
+    def context(self, kind: str, details: dict) -> None:
+        self.end_line()
+        print(f"  context> {describe_context(kind, details)}")
+        if kind == "compacted" and self.verbose:
+            print(f"  summary> {_short(details['summary'], 600)}")
 
 
 def _short(text: str, limit: int = 120) -> str:
