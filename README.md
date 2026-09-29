@@ -187,12 +187,52 @@ blocks (the API rejects a request whose history changed underneath them), so
 the Anthropic provider asks the API to drop the thinking blocks that no longer
 match instead (`block_binding` with `drop_block`).
 
+### MCP servers
+
+[MCP](https://modelcontextprotocol.io) (Model Context Protocol) is a standard
+way for programs to offer tools to agents. There are ready-made servers for
+files, git, databases, web fetching and much more, written in any language.
+Add one to `config.toml` and its tools appear next to the built-in ones:
+
+```toml
+[mcp_servers.files]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[mcp_servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+```
+
+```
+$ simple-agent
+(MCP server 'files': 14 tools (asks before each call))
+(MCP server 'fetch': 1 tools (asks before each call))
+you> /tools
+  ...
+  files__read_text_file (asks first): Read the complete contents of a file ... (from MCP server 'files')
+```
+
+Each tool is named `<server>__<tool>` so names can't clash. Because an MCP
+server can do anything, every call asks y/N first, like `write_file`. Add
+`trusted = true` to a server's section to let its tools run without asking.
+A server can also get extra environment variables with `env = { KEY = "value" }`
+(for example an API token). A server that fails to start is reported and
+skipped, and `--no-mcp` starts without any servers.
+
+`simple_agent/mcp.py` is a small hand-written client, so the whole protocol is
+readable in one file: the agent starts the server as a subprocess and sends it
+one line of JSON per message on stdin (`initialize`, then `tools/list`, then
+`tools/call` for each call), reading the replies from stdout. The first run of
+an `npx` or `uvx` server downloads it, which can take a while. Only servers
+that run locally over stdio are supported; see the ideas at the end for HTTP.
+
 ### Config file
 
 Instead of flags, copy `config.example.toml` to `config.toml` (in the folder you
 run from, or `~/.config/simple-agent/config.toml`) and edit it. You can set the
 provider, model, server URL, system prompt, step limit, streaming, trace mode,
-context management and where traces and sessions are stored there. Flags always
+context management, MCP servers and where traces and sessions are stored there. Flags always
 win over the file. API keys are read from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 so they don't have to live in a file.
 
@@ -211,6 +251,7 @@ so they don't have to live in a file.
 | [`simple_agent/providers/openai_compat.py`](simple_agent/providers/openai_compat.py) | Provider for LM Studio and any OpenAI-compatible server. |
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
+| [`simple_agent/mcp.py`](simple_agent/mcp.py) | A small MCP client: adds tools from MCP servers to the registry. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
 | [`simple_agent/trace.py`](simple_agent/trace.py) | Trace mode: prints each loop step and writes the JSONL log. |
@@ -331,7 +372,9 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
   the oldest turns, or a memory file the agent writes notes to.
 - Write a small script that reads two trace logs and compares how different
   models used the same tools.
-- Add a web search tool, or connect MCP servers as tool sources.
+- Add a web search tool, or find an MCP server that has one.
+- Support MCP servers that run over HTTP ("Streamable HTTP" in the MCP spec):
+  the same JSON-RPC messages, sent as POST requests instead of stdin lines.
 - Run the same task on a local model and on Claude and measure the difference.
 
 ## Tests

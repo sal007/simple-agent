@@ -10,9 +10,10 @@ import sys
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import sessions
+from . import mcp, sessions
 from .providers import create_provider
 from .context import CLEARED_PREFIX
+from .tools import default_tools
 from .trace import Tracer, describe_context
 
 HELP = """Commands:
@@ -39,6 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trace", action="store_true", default=None, help="Print every step of the agent loop and save it to a log file.")
     parser.add_argument("--resume", metavar="NAME", help='Continue a saved conversation, e.g. --resume last.')
     parser.add_argument("--no-stream", action="store_true", help="Wait for whole replies instead of streaming them.")
+    parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("prompt", nargs="*", help="Ask one question and exit instead of starting the REPL.")
@@ -63,7 +65,24 @@ def main(argv: list[str] | None = None) -> int:
         events=printer.events(),
         context=settings.context,
     )
-    agent.tools.approve = _confirm  # write_file and run_shell ask here before running.
+    # MCP servers from config.toml add their tools next to the built-in ones.
+    # (A copy of the registry, so the built-in list itself isn't changed.)
+    servers = []
+    if settings.mcp_servers and not args.no_mcp:
+        agent.tools = default_tools.copy()
+        servers, messages = mcp.connect(settings.mcp_servers, agent.tools)
+        for message in messages:
+            print(f"({message})")
+    agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
+    try:
+        return _run(args, settings, agent, printer, provider)
+    finally:
+        for server in servers:
+            server.close()
+
+
+def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, provider) -> int:
+    """Everything after setup: trace mode, --resume, then one question or the REPL."""
     trace = settings.trace if args.trace is None else args.trace
     if trace:
         # The tracer prints each step itself (whole replies, not streamed),

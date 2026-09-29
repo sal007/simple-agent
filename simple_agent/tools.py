@@ -52,10 +52,21 @@ class ToolRegistry:
 
         def register(func: Callable[..., Any]) -> Callable[..., Any]:
             schema = parameters or {"type": "object", "properties": {}}
-            self._tools[func.__name__] = Tool(ToolSpec(func.__name__, description, schema), func, confirm)
+            self.add(ToolSpec(func.__name__, description, schema), func, confirm)
             return func
 
         return register
+
+    def add(self, spec: ToolSpec, func: Callable[..., Any], confirm: bool = False) -> None:
+        """Register a tool without the decorator (mcp.py uses this for server tools)."""
+        self._tools[spec.name] = Tool(spec, func, confirm)
+
+    def copy(self) -> ToolRegistry:
+        """A new registry with the same tools, to add more to without changing this one."""
+        new = ToolRegistry()
+        new._tools = dict(self._tools)
+        new.approve = self.approve
+        return new
 
     def asks_first(self, name: str) -> bool:
         return name in self._tools and self._tools[name].confirm
