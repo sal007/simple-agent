@@ -195,8 +195,28 @@ arguments. The model never runs code itself: it asks for a tool by name, the
 agent runs it, and the result goes back as text. Errors are returned as text
 too, so the model can see what went wrong and try again.
 
-The starter tools are deliberately read-only: `get_current_time`, `calculator`
-(a safe arithmetic evaluator, not `eval`), `list_files` and `read_file`.
+The starter tools come in two kinds. Four only read: `get_current_time`,
+`calculator` (a safe arithmetic evaluator, not `eval`), `list_files` and
+`read_file`. Two change things, `write_file` and `run_shell`, so they are
+registered with `confirm=True` and the agent asks you first:
+
+```
+you> save a haiku about tea to tea.txt
+  tool> write_file({"path": "tea.txt", "content": "Steam curls from the cup..."})
+  approve> the agent wants to run write_file with:
+    path: tea.txt
+    content: Steam curls from the cup
+             ...
+  Allow? [y/N] y
+agent> Saved the haiku to tea.txt.
+```
+
+Anything but `y` declines, and the model is told you said no. When nobody can
+answer (input piped in, or tests), these tools are always declined. `/tools`
+marks them "(asks first)". The check lives in `ToolRegistry.run()`, and the
+CLI plugs in the prompt by setting `agent.tools.approve`. Read each command
+before you allow it: `run_shell` runs exactly what the model wrote, with your
+permissions.
 
 ## Extending it
 
@@ -215,7 +235,8 @@ def word_count(text: str) -> str:
     return str(len(text.split()))
 ```
 
-Restart and it appears in `/tools`. The description matters: it's the only
+Restart and it appears in `/tools`. Add `confirm=True` to the decorator if the
+tool changes anything, so the user has to approve each call. The description matters: it's the only
 thing the model knows about the tool.
 
 **Add a provider.** Write a class with `name`, `model` and
@@ -227,8 +248,7 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
 
 - Measure time to first token with streaming on, and compare models.
 - Save and load conversations (the history is just a list of dataclasses).
-- Ask for confirmation before running a tool, then add a `write_file` or
-  `run_shell` tool behind that gate.
+- Remember "always allow" answers per tool for the rest of a session.
 - Trim or summarize old history when the conversation gets long.
 - Write a small script that reads two trace logs and compares how different
   models used the same tools.
