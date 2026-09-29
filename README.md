@@ -72,11 +72,48 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 Add `-v` to also see what each tool returned. Pass a question as arguments to
 ask once and exit: `simple-agent "what files are in this folder?"`.
 
+### Trace mode
+
+Add `--trace` to watch the agent loop step by step. You see what is sent to the
+model, what comes back (text, tool calls, why it stopped, tokens, how long it
+took), and every tool result:
+
+```
+$ simple-agent --trace "what is 6*7?"
+  trace> logging to traces/20260928-234250-openai-qwen2.5-7b-instruct.jsonl
+  trace> step 1: sending 1 message to the model (1 new)
+  trace>   + [user] what is 6*7?
+  trace> step 1: reply in 1.84s, stop=tool_calls, tokens: input 412, output 21
+  trace>   tool call: calculator({"expression": "6*7"})
+  trace>   tool result (0.1 ms): 42
+  trace> step 2: sending 3 messages to the model (1 new)
+  trace>   + [tool result] 42
+  trace> step 2: reply in 0.93s, stop=stop, tokens: input 445, output 9
+  trace>   text: 6 × 7 = 42.
+agent> 6 × 7 = 42.
+```
+
+Notice that step 2 sends all three messages again: the model has no memory of
+its own, so every request carries the whole conversation.
+
+Each run is also saved to `traces/` as a JSONL file (one JSON object per line),
+named after the time, provider and model. The events are `run_start` (system
+prompt and tools), `turn_start`, `request` (only the messages that are new since
+the last request), `reply` (with `usage`, `seconds` and `stop_reason`), `tool`,
+`turn_end`, `error` and `reset`. That makes it easy to compare models on the
+same questions, for example total tokens per run:
+
+```bash
+python -c "import json,sys; print(sum(e['usage'].get('output_tokens',0) for e in map(json.loads, open(sys.argv[1])) if e['event']=='reply'))" traces/<file>.jsonl
+```
+
+Set `trace = true` in `config.toml` to have it on all the time.
+
 ### Config file
 
 Instead of flags, copy `config.example.toml` to `config.toml` (in the folder you
 run from, or `~/.config/simple-agent/config.toml`) and edit it. You can set the
-provider, model, server URL, system prompt and step limit there. Flags always
+provider, model, server URL, system prompt, step limit and trace mode there. Flags always
 win over the file. API keys are read from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 so they don't have to live in a file.
 
@@ -95,6 +132,7 @@ so they don't have to live in a file.
 | [`simple_agent/providers/openai_compat.py`](simple_agent/providers/openai_compat.py) | Provider for LM Studio and any OpenAI-compatible server. |
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
+| [`simple_agent/trace.py`](simple_agent/trace.py) | Trace mode: prints each loop step and writes the JSONL log. |
 | [`simple_agent/config.py`](simple_agent/config.py) | Merges defaults, `config.toml` and CLI flags. |
 | [`simple_agent/cli.py`](simple_agent/cli.py) | The terminal REPL. |
 
@@ -174,8 +212,8 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
 - Ask for confirmation before running a tool, then add a `write_file` or
   `run_shell` tool behind that gate.
 - Trim or summarize old history when the conversation gets long.
-- Log every request and reply to a JSONL file and compare how different models
-  use the same tools.
+- Write a small script that reads two trace logs and compares how different
+  models used the same tools.
 - Add a web search tool, or connect MCP servers as tool sources.
 - Run the same task on a local model and on Claude and measure the difference.
 

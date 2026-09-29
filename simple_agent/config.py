@@ -27,6 +27,8 @@ class Settings:
     api_key: str | None
     system_prompt: str
     max_steps: int
+    trace: bool = False
+    trace_dir: str = "traces"
 
 
 def load_file(path: str | None) -> dict:
@@ -63,4 +65,6 @@ def resolve(
         api_key=os.environ.get(defaults["api_key_env"]) or section.get("api_key"),
         system_prompt=file_config.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         max_steps=int(file_config.get("max_steps", 10)),
+        trace=bool(file_config.get("trace", False)),
+        trace_dir=file_config.get("trace_dir", "traces"),
     )

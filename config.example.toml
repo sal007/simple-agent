@@ -10,6 +10,10 @@ provider = "openai"
 # Safety net: the most model calls the agent makes for a single user message.
 max_steps = 10
 
+# Trace mode: print every step of the agent loop and save it as JSONL (same as --trace).
+trace = false
+trace_dir = "traces"
+
 [providers.openai]
 # LM Studio's local server. Ollama is http://localhost:11434/v1, OpenAI is https://api.openai.com/v1.
 base_url = "http://localhost:1234/v1"
