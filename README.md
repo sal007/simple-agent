@@ -64,6 +64,8 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 | -------------- | --------------------------------- |
 | `/help`        | list commands                     |
 | `/tools`       | list the tools the agent can call |
+| `/plugins`     | list plugin files and their tools |
+| `/reload`      | load the plugin files again       |
 | `/history`     | show the conversation so far      |
 | `/usage`       | tokens used this session          |
 | `/reset`       | start a new conversation          |
@@ -187,6 +189,46 @@ blocks (the API rejects a request whose history changed underneath them), so
 the Anthropic provider asks the API to drop the thinking blocks that no longer
 match instead (`block_binding` with `drop_block`).
 
+### Plugins
+
+To add a tool without touching the agent's code, put a `.py` file in a
+`plugins/` folder (next to where you run the agent, or in
+`~/.config/simple-agent/plugins/`). Every file there is loaded at start-up and
+its tools join the built-in ones:
+
+```python
+# plugins/greet.py
+from simple_agent.plugins import tool
+
+@tool(
+    "Greet someone by name.",
+    {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+)
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+```
+
+```
+$ simple-agent
+(plugin plugins/greet.py: greet)
+(plugin plugins/word_count.py: word_count)
+```
+
+`@tool` takes the same arguments as the built-in tools in `tools.py`, including
+`confirm=True` to ask before each call. While experimenting, edit the file and
+type `/reload`: the plugins are loaded again and the next message uses the new
+version, with no restart and the conversation kept. A plugin tool with the same
+name as a built-in one replaces it, which is an easy way to try a different
+description of, say, `read_file` and see how the model's behavior changes.
+
+A file that fails to load is reported and skipped. Files starting with `_` are
+not loaded, so shared helpers can live there. `plugins/word_count.py` is a
+working example to copy. Set `plugin_dirs` in `config.toml` to use other
+folders, or start with `--no-plugins` to skip them.
+
+Plugins are ordinary Python that runs with your permissions, so only use ones
+you wrote or trust.
+
 ### MCP servers
 
 [MCP](https://modelcontextprotocol.io) (Model Context Protocol) is a standard
@@ -232,7 +274,7 @@ that run locally over stdio are supported; see the ideas at the end for HTTP.
 Instead of flags, copy `config.example.toml` to `config.toml` (in the folder you
 run from, or `~/.config/simple-agent/config.toml`) and edit it. You can set the
 provider, model, server URL, system prompt, step limit, streaming, trace mode,
-context management, MCP servers and where traces and sessions are stored there. Flags always
+context management, MCP servers, plugin folders and where traces and sessions are stored there. Flags always
 win over the file. API keys are read from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 so they don't have to live in a file.
 
@@ -251,6 +293,8 @@ so they don't have to live in a file.
 | [`simple_agent/providers/openai_compat.py`](simple_agent/providers/openai_compat.py) | Provider for LM Studio and any OpenAI-compatible server. |
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
+| [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
+| [`plugins/word_count.py`](plugins/word_count.py) | An example plugin. |
 | [`simple_agent/mcp.py`](simple_agent/mcp.py) | A small MCP client: adds tools from MCP servers to the registry. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
@@ -340,7 +384,8 @@ permissions.
 
 ## Extending it
 
-**Add a tool.** In `tools.py`:
+**Add a tool.** The quickest way is a plugin (see [Plugins](#plugins)). To make
+it one of the built-in tools instead, add it to `tools.py`:
 
 ```python
 @default_tools.tool(
