@@ -49,6 +49,9 @@ class AgentEvents:
     # The context manager changed the history: kind is "cleared", "compacting",
     # "compacted" or "compact_failed"; details holds the numbers (see context.py).
     on_context: Callable[[str, dict], None] = lambda kind, details: None
+    # A sub-agent (see subagents.py) is working: kind is "start", "tool_call",
+    # "tool_result" or "end"; details holds the task, tool call or answer.
+    on_subagent: Callable[[str, dict], None] = lambda kind, details: None
 
 
 @dataclass

@@ -108,7 +108,7 @@ def test_task_files_are_checked(tmp_path):
 def test_the_starter_tasks_load():
     tasks = load_tasks([REPO_EVALS])
     groups = {t.id.split("/")[0] for t in tasks}
-    assert groups == {"math", "files", "multi_step"} and len(tasks) >= 10
+    assert {"math", "files", "multi_step", "many_files"} <= groups and len(tasks) >= 10
 
 
 def test_eval_command_saves_and_compares(tmp_path, monkeypatch, capsys):

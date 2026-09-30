@@ -131,7 +131,7 @@ Each run is also saved to `traces/` as a JSONL file (one JSON object per line),
 named after the time, provider and model. The events are `run_start` (system
 prompt and tools), `turn_start`, `request` (only the messages that are new since
 the last request), `reply` (with `usage`, `seconds` and `stop_reason`), `tool`,
-`turn_end`, `error`, `reset` and `context`. That makes it easy to compare models on the
+`turn_end`, `error`, `reset`, `context` and `subagent`. That makes it easy to compare models on the
 same questions, for example total tokens per run:
 
 ```bash
@@ -189,6 +189,44 @@ blocks (the API rejects a request whose history changed underneath them), so
 the Anthropic provider asks the API to drop the thinking blocks that no longer
 match instead (`block_binding` with `drop_block`).
 
+### Sub-agents
+
+The model gets one extra tool, `delegate`, that hands a subtask to a helper
+agent. The helper is a fresh agent with the same model and tools but an empty
+conversation. It works through the task on its own, and only its final answer
+comes back to the main conversation:
+
+```
+you> what's the total of units sold in the reports folder?
+  tool> delegate({"task": "Read every file in the reports folder and add up the 'Units sold' numbers..."})
+  sub-agent> started: Read every file in the reports folder and add up the 'Units sold' numbers...
+  sub-agent> tool call: list_files({"path": "reports"})
+  sub-agent> tool call: read_file({"path": "reports/central.txt"})
+  ...
+  sub-agent> finished in 8 steps (9120 tokens): The total is 8146 (central 2210, east 1502, ...).
+agent> 8,146 units were sold across the six stores.
+```
+
+The point is what *doesn't* happen: the six reports never enter the main
+conversation, which only grows by one short answer. That matters for small
+local models with short context windows, and it's how larger agents split up
+work. The costs are that the model has to write a task the helper can do
+without seeing the conversation, and that the helper's calls use tokens too
+(they're included in `/usage`). A helper can't delegate again, so there's only
+one level. Sub-agents are in `simple_agent/subagents.py`.
+
+Whether this actually helps a given model is a good question for the eval
+runner: `evals/many_files.toml` has tasks that need a lot of reading, so compare
+
+```
+simple-agent eval --only many_files/
+simple-agent eval --only many_files/ --no-subagents
+```
+
+`--no-subagents` (or `subagents = false` in `config.toml`) turns the tool off
+in the chat too. With `-v` you also see the helper's tool results, and trace
+mode logs everything the helper does as `subagent` events.
+
 ### Eval runner
 
 `simple-agent eval` runs a fixed set of tasks against a model and scores the
@@ -227,8 +265,9 @@ task several times (models don't answer the same way every time, so one run
 can mislead), and `--provider`, `--model` and `--base-url` work as in the chat.
 
 **Tasks** are TOML files in `evals/`. The starter set covers arithmetic
-(`math.toml`), reading files (`files.toml`) and multi-step tool use
-(`multi_step.toml`). A task is an id, a prompt, optional files to create in its
+(`math.toml`), reading files (`files.toml`), multi-step tool use
+(`multi_step.toml`) and tasks that need a lot of reading (`many_files.toml`,
+see [Sub-agents](#sub-agents)). A task is an id, a prompt, optional files to create in its
 folder, and one or more checks that must all pass:
 
 ```toml
@@ -365,6 +404,7 @@ so they don't have to live in a file.
 | [`simple_agent/mcp.py`](simple_agent/mcp.py) | A small MCP client: adds tools from MCP servers to the registry. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
+| [`simple_agent/subagents.py`](simple_agent/subagents.py) | The delegate tool: runs a subtask in a fresh helper agent. |
 | [`simple_agent/evals.py`](simple_agent/evals.py) | The eval runner: runs tasks, checks answers, saves and compares results. |
 | [`evals/`](evals/) | The starter eval tasks. |
 | [`simple_agent/trace.py`](simple_agent/trace.py) | Trace mode: prints each loop step and writes the JSONL log. |
