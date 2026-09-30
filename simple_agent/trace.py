@@ -65,6 +65,7 @@ class Tracer:
             on_reset=self.reset,
             on_context=self.context,
             on_subagent=self.subagent,
+            on_plan=self.plan,
         )
 
     # --- the callbacks, in the order the agent calls them ---------------------
@@ -132,6 +133,13 @@ class Tracer:
         self._print(f"  sub-agent {describe_subagent(kind, details, 300)}")
         self._log("subagent", kind=kind, **details)
 
+    def plan(self, steps: list[dict]) -> None:
+        # The plan is also added to the system prompt from now on.
+        self._print("  plan updated:")
+        for line in render_plan(steps).splitlines():
+            self._print(f"    {line}")
+        self._log("plan", steps=steps)
+
     # --- helpers --------------------------------------------------------------
 
     def _print(self, text: str) -> None:
@@ -157,6 +165,11 @@ def describe_context(kind: str, details: dict) -> str:
     if kind == "compact_failed":
         return f"could not summarize, keeping the full history ({details['error']})"
     return f"{kind} {details}"
+
+
+def render_plan(steps: list[dict]) -> str:
+    marks = {"pending": "[ ]", "in_progress": "[>]", "done": "[x]"}
+    return "\n".join(f"{marks.get(s['status'], '[?]')} {s['step']}" for s in steps) or "(empty plan)"
 
 
 def describe_subagent(kind: str, details: dict, limit: int = 120) -> str:

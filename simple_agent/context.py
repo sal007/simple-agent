@@ -66,7 +66,7 @@ class ContextManager:
 
     def estimate(self, agent: Agent) -> int:
         """Roughly how many tokens the next request will be (about 4 characters per token)."""
-        chars = len(agent.system_prompt) + len(json.dumps([asdict(t) for t in agent.tools.specs()]))
+        chars = len(agent.system()) + len(json.dumps([asdict(t) for t in agent.tools.specs()]))
         for m in agent.history:
             chars += len(m.content) + sum(len(json.dumps(c.arguments)) + len(c.name) for c in m.tool_calls)
         return chars // 4
@@ -130,7 +130,7 @@ class ContextManager:
             # The same system prompt and tools as a normal request, with one
             # extra user message at the end asking for the summary.
             reply = agent.provider.chat(
-                agent.system_prompt, older + [Message(role="user", content=SUMMARY_PROMPT)], agent.tools.specs()
+                agent.system(), older + [Message(role="user", content=SUMMARY_PROMPT)], agent.tools.specs()
             )
         except Exception as exc:  # noqa: BLE001 - a failed summary shouldn't lose the user's turn
             agent.events.on_context("compact_failed", {"error": f"{type(exc).__name__}: {exc}"})

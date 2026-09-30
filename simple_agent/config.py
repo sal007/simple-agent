@@ -40,6 +40,7 @@ class Settings:
     mcp_servers: list[McpServerConfig] = field(default_factory=list)
     plugin_dirs: list[str] = field(default_factory=lambda: list(DEFAULT_PLUGIN_DIRS))
     subagents: bool = True  # Offer the delegate tool (see subagents.py).
+    planning: bool = True  # Offer the update_plan tool (see planning.py).
 
 
 def load_file(path: str | None) -> dict:
@@ -84,6 +85,7 @@ def resolve(
         mcp_servers=_mcp_servers(file_config.get("mcp_servers", {})),
         plugin_dirs=list(file_config.get("plugin_dirs", DEFAULT_PLUGIN_DIRS)),
         subagents=bool(file_config.get("subagents", True)),
+        planning=bool(file_config.get("planning", True)),
     )
 
 

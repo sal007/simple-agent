@@ -1,0 +1,36 @@
+# Longer tasks with several steps that depend on each other: read, combine,
+# compute, then write in a set format. Keeping track of where you are is part
+# of the difficulty, which is what the update_plan tool is for.
+# Compare a model with and without it:
+#
+#   simple-agent eval --only planning/
+#   simple-agent eval --only planning/ --no-planning
+#
+# The results file records each task's final plan. To require one, add
+# check.plan_made = true (or check.plan_completed = true) to a task, but then
+# the task always fails with --no-planning.
+
+[[task]]
+id = "orders-summary"
+prompt = """The orders folder has one CSV file per day. Each line is customer,amount. Work out each \
+customer's total across all the days. Then write summary.csv with the header line customer,total and \
+one line per customer, sorted from the biggest total to the smallest."""
+files."orders/monday.csv" = "alice,120\nbob,40\ncarol,75\n"
+files."orders/tuesday.csv" = "carol,160\nalice,35\n"
+files."orders/wednesday.csv" = "bob,55\nalice,75\ncarol,75\ndave,20\n"
+check.file_matches = { "summary.csv" = ["^customer,total", "carol,310\\s+alice,230\\s+bob,95\\s+dave,20"] }
+
+[[task]]
+id = "temperature-report"
+prompt = """The temps folder has one file per city with five days of temperatures in Celsius, one per \
+line. Write report.md with one line per city in the form "<city>: min <min>, max <max>, average \
+<average>" (average rounded to 1 decimal), and a last line saying which city was warmest on average."""
+files."temps/oslo.txt" = "-3\n1\n4\n2\n0\n"
+files."temps/lisbon.txt" = "14\n17\n16\n18\n15\n"
+files."temps/denver.txt" = "5\n12\n-1\n8\n9\n"
+check.file_matches = { "report.md" = [
+    "oslo[^\\n]*min -3[^\\n]*max 4[^\\n]*average 0\\.8",
+    "lisbon[^\\n]*min 14[^\\n]*max 18[^\\n]*average 16(\\.0)?\\b",
+    "denver[^\\n]*min -1[^\\n]*max 12[^\\n]*average 6\\.6",
+    "warmest[^\\n]*lisbon|lisbon[^\\n]*warmest",
+] }
