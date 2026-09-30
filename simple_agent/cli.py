@@ -34,7 +34,7 @@ HELP = """Commands:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.")
+    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval (see simple-agent eval --help).")
     parser.add_argument("--provider", choices=list(PROVIDER_DEFAULTS), help="Which backend to use.")
     parser.add_argument("--model", help="Model name, e.g. the id LM Studio shows, or claude-opus-5-5.")
     parser.add_argument("--base-url", help="API base URL for the openai provider (LM Studio, Ollama, ...).")
@@ -52,6 +52,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["eval"]:  # `simple-agent eval ...` runs the eval tasks instead of the chat.
+        from . import evals
+
+        return evals.main(argv[1:])
     args = parse_args(argv)
     try:
         settings = resolve(load_file(args.config), args.provider, args.model, args.base_url)

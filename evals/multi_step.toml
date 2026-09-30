@@ -1,0 +1,30 @@
+# Tasks that need several tool calls in a row: find, read, compute, write.
+# write_file is allowed without asking during evals (each task has its own
+# temporary folder); other tools that ask first are declined.
+
+[[task]]
+id = "write-a-file"
+prompt = "Create a file called hello.txt that contains exactly this text: Hello from the agent"
+check.file_contains = { "hello.txt" = "Hello from the agent" }
+
+[[task]]
+id = "sum-a-file"
+prompt = "Add up all the numbers in numbers.txt and tell me the total."
+files."numbers.txt" = "17\n42\n8\n133\n5\n"
+check.answer_number = 205
+check.tool_used = "read_file"
+
+[[task]]
+id = "read-compute-write"
+prompt = "prices.txt lists item prices. Work out the total with 8% sales tax added, and write just that total, rounded to 2 decimals, to total.txt."
+files."prices.txt" = "coffee 4.50\nbagel 3.25\njuice 5.00\n"
+check.file_contains = { "total.txt" = "13.77" }
+check.tool_used = ["read_file", "write_file"]
+
+[[task]]
+id = "find-the-file"
+prompt = "One of the files in the docs folder mentions a meeting. What day is the meeting?"
+files."docs/a.txt" = "Shopping list: eggs, flour.\n"
+files."docs/b.txt" = "Reminder: the team meeting moved to Thursday at 3pm.\n"
+files."docs/c.txt" = "Wifi password is on the fridge.\n"
+check.answer_contains = "Thursday"

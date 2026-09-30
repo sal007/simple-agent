@@ -7,3 +7,4 @@ config.toml
 .env
 traces/
 sessions/
+eval_results/

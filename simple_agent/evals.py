@@ -1,0 +1,365 @@
+"""The eval runner: run a fixed set of tasks against a model and score the answers.
+
+    simple-agent eval                                   # every task in evals/
+    simple-agent eval --provider anthropic              # the same tasks on Claude
+    simple-agent eval --compare eval_results/a.json eval_results/b.json
+
+Each task is a prompt plus checks, written in a TOML file in evals/:
+
+    [[task]]
+    id = "multiply"
+    prompt = "What is 1234 * 5678?"
+    check.answer_number = 7006652
+
+For every task the runner starts a fresh Agent (the same loop the chat uses,
+with the same tools and plugins) in a new empty folder, puts the task's files
+there, sends the prompt, and then runs the checks on the final answer and on
+the folder. It records whether the task passed, how many model calls (steps)
+it took, which tools were called, the tokens used and the whole conversation,
+and saves one JSON file per run in eval_results/ so runs can be compared.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import __version__
+from .agent import Agent, AgentEvents
+from .config import load_file, resolve
+from .plugins import PluginLoader
+from .providers import create_provider
+from .providers.base import Provider
+from .tools import ToolRegistry, default_tools
+from .trace import _message_dict
+
+
+@dataclass
+class Task:
+    id: str  # "<file>/<id>", e.g. "math/multiply".
+    prompt: str
+    checks: dict[str, Any]
+    files: dict[str, str] = field(default_factory=dict)  # Created in the task's folder first.
+    approve: list[str] = field(default_factory=lambda: ["write_file"])  # Tools allowed without asking.
+
+
+# --- loading tasks -------------------------------------------------------------
+
+
+def load_tasks(paths: list[str | Path]) -> list[Task]:
+    """Read tasks from TOML files, or from every .toml file in a folder."""
+    files: list[Path] = []
+    for p in map(Path, paths):
+        files += sorted(p.glob("*.toml")) if p.is_dir() else [p]
+    tasks = []
+    for path in files:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+        for entry in data.get("task", []):
+            name = f"{path.stem}/{entry['id']}"
+            unknown = set(entry.get("check", {})) - set(CHECKS)
+            if unknown:
+                raise ValueError(f"{name}: unknown check(s) {', '.join(sorted(unknown))}. Known: {', '.join(CHECKS)}")
+            if not entry.get("check"):
+                raise ValueError(f"{name}: a task needs at least one check")
+            tasks.append(Task(
+                id=name,
+                prompt=entry["prompt"],
+                checks=entry["check"],
+                files=entry.get("files", {}),
+                approve=entry.get("approve", ["write_file"]),
+            ))
+    return tasks
+
+
+# --- checks ----------------------------------------------------------------------
+# Each check gets the run (answer, folder, tools used, steps) and the value
+# written in the task file, and returns (passed, detail).
+
+
+@dataclass
+class Run:
+    answer: str
+    folder: Path
+    tools_called: list[str]
+    steps: int
+
+
+def _as_list(value) -> list:
+    return value if isinstance(value, list) else [value]
+
+
+def _numbers(text: str) -> list[float]:
+    """Every number in the text, with thousands separators removed: "7,006,652" -> 7006652."""
+    found = re.findall(r"-?\d[\d,]*(?:\.\d+)?", text)
+    return [float(n.replace(",", "")) for n in found if n.replace(",", "").lstrip("-")]
+
+
+def check_answer_contains(run: Run, expected) -> tuple[bool, str]:
+    missing = [e for e in _as_list(expected) if e.lower() not in run.answer.lower()]
+    return not missing, f"answer is missing {missing}" if missing else "ok"
+
+
+def check_answer_contains_any(run: Run, expected) -> tuple[bool, str]:
+    ok = any(e.lower() in run.answer.lower() for e in _as_list(expected))
+    return ok, "ok" if ok else f"answer has none of {expected}"
+
+
+def check_answer_not_contains(run: Run, unwanted) -> tuple[bool, str]:
+    found = [u for u in _as_list(unwanted) if u.lower() in run.answer.lower()]
+    return not found, f"answer contains {found}" if found else "ok"
+
+
+def check_answer_matches(run: Run, pattern) -> tuple[bool, str]:
+    ok = re.search(pattern, run.answer, re.IGNORECASE | re.DOTALL) is not None
+    return ok, "ok" if ok else f"answer doesn't match /{pattern}/"
+
+
+def check_answer_number(run: Run, expected) -> tuple[bool, str]:
+    ok = any(abs(n - expected) <= 1e-6 * max(1, abs(expected)) for n in _numbers(run.answer))
+    return ok, "ok" if ok else f"{expected} not found in the answer"
+
+
+def check_file_exists(run: Run, paths) -> tuple[bool, str]:
+    missing = [p for p in _as_list(paths) if not (run.folder / p).exists()]
+    return not missing, f"missing file(s) {missing}" if missing else "ok"
+
+
+def check_file_contains(run: Run, expected: dict) -> tuple[bool, str]:
+    """expected is {path = "text it must contain"}."""
+    for path, text in expected.items():
+        target = run.folder / path
+        if not target.is_file():
+            return False, f"{path} was not created"
+        if text not in target.read_text(encoding="utf-8", errors="replace"):
+            return False, f"{path} doesn't contain {text!r}"
+    return True, "ok"
+
+
+def check_tool_used(run: Run, names) -> tuple[bool, str]:
+    missing = [n for n in _as_list(names) if n not in run.tools_called]
+    return not missing, f"never called {missing}" if missing else "ok"
+
+
+def check_max_steps(run: Run, limit: int) -> tuple[bool, str]:
+    return run.steps <= limit, "ok" if run.steps <= limit else f"took {run.steps} steps (limit {limit})"
+
+
+CHECKS = {
+    "answer_contains": check_answer_contains,  # Text (or list of texts), case-insensitive.
+    "answer_contains_any": check_answer_contains_any,
+    "answer_not_contains": check_answer_not_contains,
+    "answer_matches": check_answer_matches,  # A regular expression.
+    "answer_number": check_answer_number,  # A number that must appear in the answer.
+    "file_exists": check_file_exists,
+    "file_contains": check_file_contains,
+    "tool_used": check_tool_used,
+    "max_steps": check_max_steps,  # At most this many model calls.
+}
+
+
+# --- running -------------------------------------------------------------------
+
+
+def run_task(task: Task, make_agent, log=print) -> dict:
+    """Run one task in a fresh temporary folder and return its result."""
+    tools_called: list[str] = []
+    steps = 0
+
+    def count_step(step, reply):
+        nonlocal steps
+        steps = step
+
+    home = os.getcwd()
+    with tempfile.TemporaryDirectory(prefix="simple-agent-eval-") as tmp:
+        folder = Path(tmp)
+        for path, content in task.files.items():
+            (folder / path).parent.mkdir(parents=True, exist_ok=True)
+            (folder / path).write_text(content, encoding="utf-8")
+
+        agent: Agent = make_agent()
+        agent.events = AgentEvents(on_model_reply=count_step, on_tool_call=lambda call: tools_called.append(call.name))
+        agent.tools.approve = lambda name, arguments: name in task.approve  # No one to ask during an eval.
+        started = time.perf_counter()
+        error = None
+        os.chdir(folder)  # The tools use relative paths, so the task works inside its own folder.
+        try:
+            answer = agent.ask(task.prompt)
+        except Exception as exc:  # noqa: BLE001 - a failed call fails the task, not the run
+            answer, error = "", f"{type(exc).__name__}: {exc}"
+        finally:
+            os.chdir(home)
+        seconds = time.perf_counter() - started
+
+        run = Run(answer, folder, tools_called, steps)
+        checks = {}
+        for name, expected in task.checks.items():
+            passed, detail = CHECKS[name](run, expected)
+            checks[name] = {"passed": passed, "detail": detail}
+
+    passed = error is None and all(c["passed"] for c in checks.values())
+    result = {
+        "task": task.id,
+        "passed": passed,
+        "error": error,
+        "checks": checks,
+        "answer": answer,
+        "steps": steps,
+        "tools_called": tools_called,
+        "input_tokens": agent.usage.get("input_tokens", 0),
+        "output_tokens": agent.usage.get("output_tokens", 0),
+        "seconds": round(seconds, 2),
+        "messages": [_message_dict(m) for m in agent.history],
+    }
+    log(_result_line(result))
+    return result
+
+
+def run_tasks(tasks: list[Task], make_agent, repeat: int = 1, log=print) -> dict:
+    """Run every task `repeat` times. Returns the results and a summary."""
+    results = [run_task(task, make_agent, log) for _ in range(repeat) for task in tasks]
+    summary = summarize(results)
+    log(_summary_line(summary))
+    return {"results": results, "summary": summary}
+
+
+def summarize(results: list[dict]) -> dict:
+    n = len(results)
+    passed = sum(r["passed"] for r in results)
+    return {
+        "tasks": n,
+        "passed": passed,
+        "score": round(passed / n, 3) if n else 0.0,
+        "steps": sum(r["steps"] for r in results),
+        "input_tokens": sum(r["input_tokens"] for r in results),
+        "output_tokens": sum(r["output_tokens"] for r in results),
+        "seconds": round(sum(r["seconds"] for r in results), 2),
+    }
+
+
+def save(run: dict, out_dir: str | Path, provider: Provider) -> Path:
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    model = re.sub(r"[^A-Za-z0-9._-]+", "_", provider.model)
+    path = Path(out_dir) / f"{stamp}-{provider.name}-{model}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(run, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return path
+
+
+def compare(paths: list[str | Path], out=None) -> None:
+    """Print a table: one row per task, one column per results file."""
+    out = out or sys.stdout
+    runs = [json.loads(Path(p).read_text(encoding="utf-8")) for p in paths]
+    names = [f"{r['provider']}/{r['model']}" for r in runs]
+    tasks = list(dict.fromkeys(res["task"] for r in runs for res in r["results"]))
+    width = max([len("total")] + [len(t) for t in tasks])
+    cols = [max(len(n), 22) for n in names]
+    print(f"{'task':<{width}}  " + "  ".join(f"{n:<{c}}" for n, c in zip(names, cols)), file=out)
+    for task in tasks:
+        cells = []
+        for r, c in zip(runs, cols):
+            mine = [res for res in r["results"] if res["task"] == task]
+            if not mine:
+                cells.append(f"{'-':<{c}}")
+                continue
+            ok = sum(res["passed"] for res in mine)
+            steps = sum(res["steps"] for res in mine) / len(mine)
+            tokens = sum(res["input_tokens"] + res["output_tokens"] for res in mine) / len(mine)
+            mark = "pass" if ok == len(mine) else "FAIL" if ok == 0 else f"{ok}/{len(mine)}"
+            cells.append(f"{f'{mark} {steps:.0f} steps {tokens:.0f} tok':<{c}}")
+        print(f"{task:<{width}}  " + "  ".join(cells), file=out)
+    scores = [f"{r['summary']['passed']}/{r['summary']['tasks']} passed" for r in runs]
+    print(f"{'total':<{width}}  " + "  ".join(f"{s:<{c}}" for s, c in zip(scores, cols)), file=out)
+
+
+def _result_line(r: dict) -> str:
+    status = "PASS" if r["passed"] else "FAIL"
+    tokens = r["input_tokens"] + r["output_tokens"]
+    line = f"  {status}  {r['task']}  ({r['steps']} steps, {tokens} tokens, {r['seconds']}s)"
+    if r["error"]:  # The model call failed, so the checks don't tell us anything.
+        return line + f"\n        error: {r['error']}"
+    for name, c in r["checks"].items():
+        if not c["passed"]:
+            line += f"\n        {name}: {c['detail']}"
+    return line
+
+
+def _summary_line(s: dict) -> str:
+    return (
+        f"\n{s['passed']}/{s['tasks']} passed ({s['score']:.0%}), {s['steps']} steps, "
+        f"{s['input_tokens']} input + {s['output_tokens']} output tokens, {s['seconds']}s"
+    )
+
+
+# --- the `simple-agent eval` command ------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="simple-agent eval", description="Run the eval tasks and score the answers.")
+    parser.add_argument("tasks", nargs="*", default=["evals"], help="Task files or folders (default: evals/).")
+    parser.add_argument("--provider", help="Which backend to use.")
+    parser.add_argument("--model", help="Model name.")
+    parser.add_argument("--base-url", help="API base URL for the openai provider.")
+    parser.add_argument("--config", help="Path to a config.toml.")
+    parser.add_argument("--only", help="Only run tasks whose id contains this text, e.g. --only math/.")
+    parser.add_argument("--repeat", type=int, default=1, help="Run each task this many times (models vary).")
+    parser.add_argument("--out", default="eval_results", help="Where to save the results (default: eval_results/).")
+    parser.add_argument("--no-plugins", action="store_true", help="Don't load plugin tools.")
+    parser.add_argument("--compare", nargs="+", metavar="RESULTS", help="Compare saved results files instead of running.")
+    args = parser.parse_args(argv)
+
+    if args.compare:
+        compare(args.compare)
+        return 0
+
+    try:
+        settings = resolve(load_file(args.config), args.provider, args.model, args.base_url)
+        provider = create_provider(settings.provider, settings.model, settings.base_url, settings.api_key)
+        tasks = [t for t in load_tasks(args.tasks) if not args.only or args.only in t.id]
+    except Exception as exc:  # noqa: BLE001
+        print(f"Setup error: {exc}", file=sys.stderr)
+        return 1
+    if not tasks:
+        print(f"No tasks found in {', '.join(args.tasks)}", file=sys.stderr)
+        return 1
+
+    # The same tools as the chat: built-ins plus plugins. (MCP servers are
+    # left out so every run starts quickly and the same way.)
+    tools: ToolRegistry = PluginLoader([] if args.no_plugins else settings.plugin_dirs, default_tools).load()
+
+    def make_agent() -> Agent:
+        return Agent(
+            provider=provider,
+            tools=tools.copy(),
+            system_prompt=settings.system_prompt,
+            max_steps=settings.max_steps,
+            stream=False,
+            context=settings.context,
+        )
+
+    print(f"Running {len(tasks)} tasks x{args.repeat} on {settings.provider} · {settings.model}\n")
+    started_at = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    run = run_tasks(tasks, make_agent, args.repeat)
+    run = {
+        "provider": settings.provider,
+        "model": settings.model,
+        "base_url": settings.base_url if settings.provider == "openai" else None,
+        "simple_agent_version": __version__,
+        "started_at": started_at,
+        "system_prompt": settings.system_prompt,
+        "max_steps": settings.max_steps,
+        "tools": tools.names(),
+        **run,
+    }
+    print(f"Results saved to {save(run, args.out, provider)}")
+    return 0

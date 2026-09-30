@@ -1,0 +1,25 @@
+# Arithmetic. A model that uses the calculator tool should get all of these;
+# one that does the math "in its head" often won't.
+#
+# Each [[task]] has an id, a prompt and one or more checks (all must pass).
+# See "Eval runner" in the README for every kind of check.
+
+[[task]]
+id = "multiply"
+prompt = "What is 1234 * 5678?"
+check.answer_number = 7006652
+
+[[task]]
+id = "percentage"
+prompt = "What is 17.5% of 2480?"
+check.answer_number = 434
+
+[[task]]
+id = "expression"
+prompt = "Calculate (3 + 4) ** 5 - 12345 / 5."
+check.answer_number = 14338
+
+[[task]]
+id = "word-problem"
+prompt = "Pens cost $1.35 each. How many dollars do 48 pens cost?"
+check.answer_number = 64.8
