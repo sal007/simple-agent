@@ -10,12 +10,12 @@ import sys
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import mcp, sessions
+from . import mcp, sessions, subagents
 from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
 from .tools import default_tools
-from .trace import Tracer, describe_context
+from .trace import Tracer, describe_context, describe_subagent
 
 HELP = """Commands:
   /help          show this help
@@ -44,6 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", metavar="NAME", help='Continue a saved conversation, e.g. --resume last.')
     parser.add_argument("--no-stream", action="store_true", help="Wait for whole replies instead of streaming them.")
     parser.add_argument("--no-plugins", action="store_true", help="Don't load tools from the plugin folders.")
+    parser.add_argument("--no-subagents", action="store_true", help="Don't offer the model the delegate tool.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -83,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         for message in messages:
             print(f"({message})")
     agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
+    if settings.subagents and not args.no_subagents:
+        subagents.enable(agent)  # Adds the delegate tool (see subagents.py).
     # Plugins go on top, from a loader that can load them again for /reload.
     loader = PluginLoader([] if args.no_plugins else settings.plugin_dirs, agent.tools)
     agent.tools = loader.load()
@@ -275,6 +278,7 @@ class Printer:
             on_tool_call=self.tool_call,
             on_tool_result=self.tool_result,
             on_context=self.context,
+            on_subagent=self.subagent,
         )
 
     def turn_start(self, user_input: str) -> None:
@@ -300,12 +304,17 @@ class Printer:
         if self.verbose:
             print(f"  result> {_short(result, 300)}")
 
-
     def context(self, kind: str, details: dict) -> None:
         self.end_line()
         print(f"  context> {describe_context(kind, details)}")
         if kind == "compacted" and self.verbose:
             print(f"  summary> {_short(details['summary'], 600)}")
+
+    def subagent(self, kind: str, details: dict) -> None:
+        if kind == "tool_result" and not self.verbose:
+            return
+        self.end_line()
+        print(f"  sub-agent> {describe_subagent(kind, details, 300 if self.verbose else 120)}")
 
 
 def _short(text: str, limit: int = 120) -> str:

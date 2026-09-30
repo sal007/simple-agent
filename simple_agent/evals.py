@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, subagents
 from .agent import Agent, AgentEvents
 from .config import load_file, resolve
 from .plugins import PluginLoader
@@ -173,12 +173,19 @@ CHECKS = {
 
 def run_task(task: Task, make_agent, log=print) -> dict:
     """Run one task in a fresh temporary folder and return its result."""
-    tools_called: list[str] = []
+    tools_called: list[str] = []  # By the agent and by any sub-agents it starts.
+    helpers: list[dict] = []  # One entry per sub-agent: its task, answer and steps.
     steps = 0
 
     def count_step(step, reply):
         nonlocal steps
         steps = step
+
+    def on_subagent(kind, details):
+        if kind == "tool_call":
+            tools_called.append(details["name"])
+        elif kind == "end":
+            helpers.append(dict(details))
 
     home = os.getcwd()
     with tempfile.TemporaryDirectory(prefix="simple-agent-eval-") as tmp:
@@ -188,7 +195,11 @@ def run_task(task: Task, make_agent, log=print) -> dict:
             (folder / path).write_text(content, encoding="utf-8")
 
         agent: Agent = make_agent()
-        agent.events = AgentEvents(on_model_reply=count_step, on_tool_call=lambda call: tools_called.append(call.name))
+        agent.events = AgentEvents(
+            on_model_reply=count_step,
+            on_tool_call=lambda call: tools_called.append(call.name),
+            on_subagent=on_subagent,
+        )
         agent.tools.approve = lambda name, arguments: name in task.approve  # No one to ask during an eval.
         started = time.perf_counter()
         error = None
@@ -216,6 +227,7 @@ def run_task(task: Task, make_agent, log=print) -> dict:
         "answer": answer,
         "steps": steps,
         "tools_called": tools_called,
+        "subagents": helpers,
         "input_tokens": agent.usage.get("input_tokens", 0),
         "output_tokens": agent.usage.get("output_tokens", 0),
         "seconds": round(seconds, 2),
@@ -285,7 +297,8 @@ def compare(paths: list[str | Path], out=None) -> None:
 def _result_line(r: dict) -> str:
     status = "PASS" if r["passed"] else "FAIL"
     tokens = r["input_tokens"] + r["output_tokens"]
-    line = f"  {status}  {r['task']}  ({r['steps']} steps, {tokens} tokens, {r['seconds']}s)"
+    helpers = f", {len(r['subagents'])} sub-agents" if r.get("subagents") else ""
+    line = f"  {status}  {r['task']}  ({r['steps']} steps{helpers}, {tokens} tokens, {r['seconds']}s)"
     if r["error"]:  # The model call failed, so the checks don't tell us anything.
         return line + f"\n        error: {r['error']}"
     for name, c in r["checks"].items():
@@ -315,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeat", type=int, default=1, help="Run each task this many times (models vary).")
     parser.add_argument("--out", default="eval_results", help="Where to save the results (default: eval_results/).")
     parser.add_argument("--no-plugins", action="store_true", help="Don't load plugin tools.")
+    parser.add_argument("--no-subagents", action="store_true", help="Don't offer the delegate tool.")
     parser.add_argument("--compare", nargs="+", metavar="RESULTS", help="Compare saved results files instead of running.")
     args = parser.parse_args(argv)
 
@@ -337,8 +351,10 @@ def main(argv: list[str] | None = None) -> int:
     # left out so every run starts quickly and the same way.)
     tools: ToolRegistry = PluginLoader([] if args.no_plugins else settings.plugin_dirs, default_tools).load()
 
+    use_subagents = settings.subagents and not args.no_subagents
+
     def make_agent() -> Agent:
-        return Agent(
+        agent = Agent(
             provider=provider,
             tools=tools.copy(),
             system_prompt=settings.system_prompt,
@@ -346,6 +362,9 @@ def main(argv: list[str] | None = None) -> int:
             stream=False,
             context=settings.context,
         )
+        if use_subagents:
+            subagents.enable(agent)
+        return agent
 
     print(f"Running {len(tasks)} tasks x{args.repeat} on {settings.provider} · {settings.model}\n")
     started_at = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -358,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": started_at,
         "system_prompt": settings.system_prompt,
         "max_steps": settings.max_steps,
-        "tools": tools.names(),
+        "tools": tools.names() + ([subagents.TOOL_NAME] if use_subagents else []),
+        "subagents": use_subagents,
         **run,
     }
     print(f"Results saved to {save(run, args.out, provider)}")

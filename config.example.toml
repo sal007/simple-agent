@@ -55,3 +55,7 @@ keep_recent_turns = 2
 
 # Folders to load plugin tools from (see "Plugins" in the README).
 # plugin_dirs = ["plugins", "~/.config/simple-agent/plugins"]
+
+# Sub-agents: offer the model a "delegate" tool that runs a subtask in a fresh
+# helper agent (same as leaving out --no-subagents).
+subagents = true

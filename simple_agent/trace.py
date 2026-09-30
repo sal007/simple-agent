@@ -64,6 +64,7 @@ class Tracer:
             on_error=self.error,
             on_reset=self.reset,
             on_context=self.context,
+            on_subagent=self.subagent,
         )
 
     # --- the callbacks, in the order the agent calls them ---------------------
@@ -125,6 +126,12 @@ class Tracer:
             # next request: that is exactly what the model will now see.
             self._sent = 0
 
+    def subagent(self, kind: str, details: dict) -> None:
+        # The helper's own model calls aren't listed step by step (its history
+        # never joins this one), but its tool calls and its answer are.
+        self._print(f"  sub-agent {describe_subagent(kind, details, 300)}")
+        self._log("subagent", kind=kind, **details)
+
     # --- helpers --------------------------------------------------------------
 
     def _print(self, text: str) -> None:
@@ -149,6 +156,20 @@ def describe_context(kind: str, details: dict) -> str:
         return f"replaced {_count(details['messages'], 'older message')} with a summary (~{before} -> ~{after} tokens)"
     if kind == "compact_failed":
         return f"could not summarize, keeping the full history ({details['error']})"
+    return f"{kind} {details}"
+
+
+def describe_subagent(kind: str, details: dict, limit: int = 120) -> str:
+    """One line about what a sub-agent is doing (shared with the CLI)."""
+    if kind == "start":
+        return f"started: {_short(details['task'], limit)}"
+    if kind == "tool_call":
+        return f"tool call: {details['name']}({json.dumps(details['arguments'])})"
+    if kind == "tool_result":
+        return f"tool result: {_short(details['result'], limit)}"
+    if kind == "end":
+        tokens = details.get("input_tokens", 0) + details.get("output_tokens", 0)
+        return f"finished in {_count(details['steps'], 'step')} ({tokens} tokens): {_short(details['answer'], limit)}"
     return f"{kind} {details}"
 
 
