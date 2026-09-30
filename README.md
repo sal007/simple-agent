@@ -189,6 +189,73 @@ blocks (the API rejects a request whose history changed underneath them), so
 the Anthropic provider asks the API to drop the thinking blocks that no longer
 match instead (`block_binding` with `drop_block`).
 
+### Eval runner
+
+`simple-agent eval` runs a fixed set of tasks against a model and scores the
+answers, so you can compare models (or prompts, or settings) with real numbers:
+
+```
+$ simple-agent eval
+Running 11 tasks x1 on openai · qwen2.5-7b-instruct
+
+  PASS  files/read-a-file  (2 steps, 1291 tokens, 2.3s)
+  FAIL  files/count-files  (2 steps, 1302 tokens, 2.1s)
+        answer_number: 3 not found in the answer
+  ...
+9/11 passed (82%), 26 steps, 14210 input + 611 output tokens, 31.4s
+Results saved to eval_results/20260930-101500-openai-qwen2.5-7b-instruct.json
+```
+
+Each task runs a fresh agent (the same loop, tools and plugins as the chat) in
+its own empty temporary folder, so tasks can't affect each other or your files.
+`write_file` is allowed without asking there; other tools that normally ask,
+like `run_shell`, are declined. The results file has, for every task, whether
+it passed, the reason for any failed check, the answer, the number of steps
+(model calls), the tools called, tokens, time, and the whole conversation.
+
+Compare saved runs side by side:
+
+```
+$ simple-agent eval --compare eval_results/*-qwen*.json eval_results/*-claude*.json
+task                         openai/qwen2.5-7b-instruct   anthropic/claude-opus-5-5
+files/count-files            FAIL 2 steps 1302 tok        pass 2 steps 2410 tok
+...
+```
+
+Other options: `--only math/` runs only matching tasks, `--repeat 5` runs each
+task several times (models don't answer the same way every time, so one run
+can mislead), and `--provider`, `--model` and `--base-url` work as in the chat.
+
+**Tasks** are TOML files in `evals/`. The starter set covers arithmetic
+(`math.toml`), reading files (`files.toml`) and multi-step tool use
+(`multi_step.toml`). A task is an id, a prompt, optional files to create in its
+folder, and one or more checks that must all pass:
+
+```toml
+[[task]]
+id = "sum-a-file"
+prompt = "Add up all the numbers in numbers.txt and tell me the total."
+files."numbers.txt" = "17\n42\n8\n133\n5\n"
+check.answer_number = 205
+check.tool_used = "read_file"
+```
+
+| Check | Passes when |
+| --- | --- |
+| `answer_contains` | the answer contains the text (or every text in a list), ignoring case |
+| `answer_contains_any` | the answer contains at least one of a list of texts |
+| `answer_not_contains` | the answer contains none of them |
+| `answer_matches` | the answer matches a regular expression |
+| `answer_number` | the number appears in the answer (`7,006,652` and `$64.80` count) |
+| `file_exists` | the file (or files) exist in the task's folder afterwards |
+| `file_contains` | `{ "file.txt" = "text" }`: the file exists and contains the text |
+| `tool_used` | the model called this tool (or all of a list of tools) |
+| `max_steps` | the task took at most this many model calls |
+
+`approve = ["write_file", "run_shell"]` on a task changes which tools may run
+without asking. Add your own `.toml` files to `evals/`, or run a different set
+with `simple-agent eval path/to/tasks`.
+
 ### Plugins
 
 To add a tool without touching the agent's code, put a `.py` file in a
@@ -298,6 +365,8 @@ so they don't have to live in a file.
 | [`simple_agent/mcp.py`](simple_agent/mcp.py) | A small MCP client: adds tools from MCP servers to the registry. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
+| [`simple_agent/evals.py`](simple_agent/evals.py) | The eval runner: runs tasks, checks answers, saves and compares results. |
+| [`evals/`](evals/) | The starter eval tasks. |
 | [`simple_agent/trace.py`](simple_agent/trace.py) | Trace mode: prints each loop step and writes the JSONL log. |
 | [`simple_agent/config.py`](simple_agent/config.py) | Merges defaults, `config.toml` and CLI flags. |
 | [`simple_agent/cli.py`](simple_agent/cli.py) | The terminal REPL. |
@@ -420,7 +489,11 @@ branch to `create_provider()` in `providers/__init__.py` and an entry to
 - Add a web search tool, or find an MCP server that has one.
 - Support MCP servers that run over HTTP ("Streamable HTTP" in the MCP spec):
   the same JSON-RPC messages, sent as POST requests instead of stdin lines.
-- Run the same task on a local model and on Claude and measure the difference.
+- Run the eval tasks on a local model and on Claude, then change one thing
+  (the system prompt, a tool description via a plugin, the context limit) and
+  see how the scores move.
+- Add an eval check that asks a second model to grade the answer ("LLM as a
+  judge") for tasks with no single right answer.
 
 ## Tests
 

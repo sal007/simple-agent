@@ -1,0 +1,25 @@
+# Reading files. Each task runs in its own empty folder containing only the
+# [task.files] listed, so the model has to use the file tools to find answers.
+
+[[task]]
+id = "read-a-file"
+prompt = "What is the third item in notes/todo.txt?"
+files."notes/todo.txt" = "1. Buy milk\n2. Call the bank\n3. Renew the library card\n4. Water the plants\n"
+check.answer_contains = "library card"
+check.tool_used = "read_file"
+
+[[task]]
+id = "count-files"
+prompt = "How many .csv files are in the data folder?"
+files."data/jan.csv" = "a,b\n1,2\n"
+files."data/feb.csv" = "a,b\n3,4\n"
+files."data/mar.csv" = "a,b\n5,6\n"
+files."data/readme.txt" = "Monthly numbers.\n"
+check.answer_number = 3
+check.tool_used = "list_files"
+
+[[task]]
+id = "find-a-setting"
+prompt = "Which port is the server configured to use? Look in the files in this folder."
+files."settings.json" = '{"server": {"host": "0.0.0.0", "port": 8443}, "debug": false}'
+check.answer_number = 8443
