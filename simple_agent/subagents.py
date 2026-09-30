@@ -20,6 +20,7 @@ A helper can't delegate again, so there is only ever one level of sub-agents.
 
 from __future__ import annotations
 
+from . import planning
 from .agent import Agent, AgentEvents
 from .providers.base import ToolSpec
 
@@ -71,6 +72,10 @@ def enable(agent: Agent) -> None:
                 on_tool_result=lambda call, result: report("tool_result", {"name": call.name, "result": result}),
             ),
         )
+        if planning.planner_of(agent):
+            # The parent plans (planning.py), so the helper gets a plan of its
+            # own rather than the parent's update_plan tool.
+            planning.enable(helper)
         report("start", {"task": task})
         try:
             answer = helper.ask(task)

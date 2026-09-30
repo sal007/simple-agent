@@ -14,7 +14,7 @@ Everything else (providers, tools, the CLI) plugs into this.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Protocol
 
 from .context import ContextManager
 from .providers.base import Message, Provider, Reply, ToolCall
@@ -52,6 +52,21 @@ class AgentEvents:
     # A sub-agent (see subagents.py) is working: kind is "start", "tool_call",
     # "tool_result" or "end"; details holds the task, tool call or answer.
     on_subagent: Callable[[str, dict], None] = lambda kind, details: None
+    # The model updated its plan (see planning.py): the full list of items.
+    on_plan: Callable[[list[dict]], None] = lambda items: None
+
+
+class Extension(Protocol):
+    """Something that keeps its own state next to the conversation (see planning.py).
+
+    system_note() is added to the end of the system prompt at every model
+    call, so the model always sees it, even after context management has
+    cleared or summarized the messages. reset() is called by Agent.reset().
+    """
+
+    def system_note(self) -> str: ...
+
+    def reset(self) -> None: ...
 
 
 @dataclass
@@ -66,6 +81,7 @@ class Agent:
     usage: dict[str, int] = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
     # Keeps the history under a token limit (see context.py). None = never trim it.
     context: ContextManager | None = None
+    extensions: list[Extension] = field(default_factory=list)
 
     def ask(self, user_input: str) -> str:
         """Run one full turn: the user's message in, the model's final answer out."""
@@ -91,7 +107,7 @@ class Agent:
                 self.context.before_model_call(self)  # Tool results can pile up within one turn.
             self.events.on_model_request(step, self.history)
             on_text = self.events.on_text if self.stream else None
-            reply = self.provider.chat(self.system_prompt, self.history, self.tools.specs(), on_text=on_text)
+            reply = self.provider.chat(self.system(), self.history, self.tools.specs(), on_text=on_text)
             self.events.on_model_reply(step, reply)
             for key, value in reply.usage.items():
                 self.usage[key] = self.usage.get(key, 0) + value
@@ -108,7 +124,14 @@ class Agent:
 
         return f"(Stopped after {self.max_steps} steps without a final answer.)"
 
+    def system(self) -> str:
+        """The system prompt for the next model call: the base prompt plus any extension notes."""
+        notes = [note for ext in self.extensions if (note := ext.system_note())]
+        return "\n\n".join([self.system_prompt, *notes])
+
     def reset(self) -> None:
         """Forget the conversation (the system prompt and tools stay)."""
         self.history.clear()
+        for ext in self.extensions:
+            ext.reset()
         self.events.on_reset()

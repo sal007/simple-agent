@@ -131,7 +131,7 @@ Each run is also saved to `traces/` as a JSONL file (one JSON object per line),
 named after the time, provider and model. The events are `run_start` (system
 prompt and tools), `turn_start`, `request` (only the messages that are new since
 the last request), `reply` (with `usage`, `seconds` and `stop_reason`), `tool`,
-`turn_end`, `error`, `reset`, `context` and `subagent`. That makes it easy to compare models on the
+`turn_end`, `error`, `reset`, `context`, `subagent` and `plan`. That makes it easy to compare models on the
 same questions, for example total tokens per run:
 
 ```bash
@@ -188,6 +188,50 @@ With Claude, editing earlier history would normally break its saved thinking
 blocks (the API rejects a request whose history changed underneath them), so
 the Anthropic provider asks the API to drop the thinking blocks that no longer
 match instead (`block_binding` with `drop_block`).
+
+### Planning
+
+The model also gets an `update_plan` tool: a to-do list it keeps for itself.
+It sends its whole plan, each step marked pending, in progress or done, and
+updates it as it works. You see the list tick off:
+
+```
+you> total up the orders per customer and write summary.csv, biggest first
+  plan> [>] Read the three order files
+        [ ] Add up each customer's total
+        [ ] Write summary.csv sorted by total
+  tool> list_files({"path": "orders"})
+  ...
+  plan> [x] Read the three order files
+        [x] Add up each customer's total
+        [>] Write summary.csv sorted by total
+```
+
+`/plan` shows the current plan at any time.
+
+A model could simply write a plan in its reply, and strong ones often do. The
+difference is that this plan is kept as state outside the conversation and
+added to the end of the system prompt at every model call. So even when
+[context management](#context-management) clears or summarizes the older
+messages, the model still sees its plan. That's aimed at small local models,
+which tend to lose track of long tasks.
+
+To see whether it helps a model, `evals/planning.toml` has two longer tasks:
+
+```
+simple-agent eval --only planning/
+simple-agent eval --only planning/ --no-planning
+```
+
+The results file records each task's final plan, and the `plan_made` and
+`plan_completed` checks can require one. `--no-planning` (or `planning = false`
+in `config.toml`) turns the tool off in the chat too. A sub-agent gets a plan
+of its own. The plan isn't saved with `/save`; it starts empty after `/load`.
+
+This is the one feature that needed a hook in the agent loop itself:
+`Agent.extensions`, objects whose `system_note()` is added to the system prompt
+at every step (and whose `reset()` runs on `/reset`). It's in `agent.py`, and
+the planner in `simple_agent/planning.py` is the example of using it.
 
 ### Sub-agents
 
@@ -266,8 +310,9 @@ can mislead), and `--provider`, `--model` and `--base-url` work as in the chat.
 
 **Tasks** are TOML files in `evals/`. The starter set covers arithmetic
 (`math.toml`), reading files (`files.toml`), multi-step tool use
-(`multi_step.toml`) and tasks that need a lot of reading (`many_files.toml`,
-see [Sub-agents](#sub-agents)). A task is an id, a prompt, optional files to create in its
+(`multi_step.toml`), tasks that need a lot of reading (`many_files.toml`,
+see [Sub-agents](#sub-agents)) and longer multi-step tasks (`planning.toml`,
+see [Planning](#planning)). A task is an id, a prompt, optional files to create in its
 folder, and one or more checks that must all pass:
 
 ```toml
@@ -288,8 +333,11 @@ check.tool_used = "read_file"
 | `answer_number` | the number appears in the answer (`7,006,652` and `$64.80` count) |
 | `file_exists` | the file (or files) exist in the task's folder afterwards |
 | `file_contains` | `{ "file.txt" = "text" }`: the file exists and contains the text |
+| `file_matches` | `{ "file.txt" = "regex" }` (or a list of them): every pattern matches the file, ignoring case |
 | `tool_used` | the model called this tool (or all of a list of tools) |
 | `max_steps` | the task took at most this many model calls |
+| `plan_made` | `true`: the agent made a plan with `update_plan` (see [Planning](#planning)) |
+| `plan_completed` | `true`: every step of that plan ended up done |
 
 `approve = ["write_file", "run_shell"]` on a task changes which tools may run
 without asking. Add your own `.toml` files to `evals/`, or run a different set
@@ -404,6 +452,7 @@ so they don't have to live in a file.
 | [`simple_agent/mcp.py`](simple_agent/mcp.py) | A small MCP client: adds tools from MCP servers to the registry. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
+| [`simple_agent/planning.py`](simple_agent/planning.py) | The update_plan tool: a to-do list shown to the model at every step. |
 | [`simple_agent/subagents.py`](simple_agent/subagents.py) | The delegate tool: runs a subtask in a fresh helper agent. |
 | [`simple_agent/evals.py`](simple_agent/evals.py) | The eval runner: runs tasks, checks answers, saves and compares results. |
 | [`evals/`](evals/) | The starter eval tasks. |

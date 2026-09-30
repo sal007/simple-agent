@@ -59,3 +59,7 @@ keep_recent_turns = 2
 # Sub-agents: offer the model a "delegate" tool that runs a subtask in a fresh
 # helper agent (same as leaving out --no-subagents).
 subagents = true
+
+# Planning: offer the model an "update_plan" tool for a to-do list that is shown
+# to it at every step (same as leaving out --no-planning).
+planning = true

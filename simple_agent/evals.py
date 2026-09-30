@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__, subagents
+from . import __version__, planning, subagents
 from .agent import Agent, AgentEvents
 from .config import load_file, resolve
 from .plugins import PluginLoader
@@ -93,6 +93,7 @@ class Run:
     folder: Path
     tools_called: list[str]
     steps: int
+    plan: list[dict] = field(default_factory=list)  # The final plan, if the agent made one.
 
 
 def _as_list(value) -> list:
@@ -146,9 +147,37 @@ def check_file_contains(run: Run, expected: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
+def check_file_matches(run: Run, expected: dict) -> tuple[bool, str]:
+    """expected is {path = "regex"} or {path = ["regex", ...]}; every pattern must match."""
+    for path, patterns in expected.items():
+        target = run.folder / path
+        if not target.is_file():
+            return False, f"{path} was not created"
+        text = target.read_text(encoding="utf-8", errors="replace")
+        for pattern in _as_list(patterns):
+            if not re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
+                return False, f"{path} doesn't match /{pattern}/"
+    return True, "ok"
+
+
 def check_tool_used(run: Run, names) -> tuple[bool, str]:
     missing = [n for n in _as_list(names) if n not in run.tools_called]
     return not missing, f"never called {missing}" if missing else "ok"
+
+
+def check_plan_made(run: Run, expected: bool) -> tuple[bool, str]:
+    made = bool(run.plan)
+    return made == expected, "ok" if made == expected else ("no plan was made" if expected else "a plan was made")
+
+
+def check_plan_completed(run: Run, expected: bool) -> tuple[bool, str]:
+    done = bool(run.plan) and all(s["status"] == "done" for s in run.plan)
+    if done == expected:
+        return True, "ok"
+    if not run.plan:
+        return False, "no plan was made"
+    left = [s["step"] for s in run.plan if s["status"] != "done"]
+    return False, f"steps not done: {left}" if expected else "every step was done"
 
 
 def check_max_steps(run: Run, limit: int) -> tuple[bool, str]:
@@ -163,8 +192,11 @@ CHECKS = {
     "answer_number": check_answer_number,  # A number that must appear in the answer.
     "file_exists": check_file_exists,
     "file_contains": check_file_contains,
+    "file_matches": check_file_matches,  # {path = regex or list of regexes}, ignoring case.
     "tool_used": check_tool_used,
     "max_steps": check_max_steps,  # At most this many model calls.
+    "plan_made": check_plan_made,  # true: the agent used update_plan (planning.py).
+    "plan_completed": check_plan_completed,  # true: every step of its plan ended up done.
 }
 
 
@@ -212,7 +244,9 @@ def run_task(task: Task, make_agent, log=print) -> dict:
             os.chdir(home)
         seconds = time.perf_counter() - started
 
-        run = Run(answer, folder, tools_called, steps)
+        planner = planning.planner_of(agent)
+        plan = planner.steps if planner else []
+        run = Run(answer, folder, tools_called, steps, plan)
         checks = {}
         for name, expected in task.checks.items():
             passed, detail = CHECKS[name](run, expected)
@@ -228,6 +262,7 @@ def run_task(task: Task, make_agent, log=print) -> dict:
         "steps": steps,
         "tools_called": tools_called,
         "subagents": helpers,
+        "plan": plan,
         "input_tokens": agent.usage.get("input_tokens", 0),
         "output_tokens": agent.usage.get("output_tokens", 0),
         "seconds": round(seconds, 2),
@@ -329,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="eval_results", help="Where to save the results (default: eval_results/).")
     parser.add_argument("--no-plugins", action="store_true", help="Don't load plugin tools.")
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the delegate tool.")
+    parser.add_argument("--no-planning", action="store_true", help="Don't offer the update_plan tool.")
     parser.add_argument("--compare", nargs="+", metavar="RESULTS", help="Compare saved results files instead of running.")
     args = parser.parse_args(argv)
 
@@ -352,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     tools: ToolRegistry = PluginLoader([] if args.no_plugins else settings.plugin_dirs, default_tools).load()
 
     use_subagents = settings.subagents and not args.no_subagents
+    use_planning = settings.planning and not args.no_planning
 
     def make_agent() -> Agent:
         agent = Agent(
@@ -364,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if use_subagents:
             subagents.enable(agent)
+        if use_planning:
+            planning.enable(agent)
         return agent
 
     print(f"Running {len(tasks)} tasks x{args.repeat} on {settings.provider} · {settings.model}\n")
@@ -377,8 +416,9 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": started_at,
         "system_prompt": settings.system_prompt,
         "max_steps": settings.max_steps,
-        "tools": tools.names() + ([subagents.TOOL_NAME] if use_subagents else []),
+        "tools": make_agent().tools.names(),
         "subagents": use_subagents,
+        "planning": use_planning,
         **run,
     }
     print(f"Results saved to {save(run, args.out, provider)}")

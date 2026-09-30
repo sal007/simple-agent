@@ -10,16 +10,17 @@ import sys
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import mcp, sessions, subagents
+from . import mcp, planning, sessions, subagents
 from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
 from .tools import default_tools
-from .trace import Tracer, describe_context, describe_subagent
+from .trace import Tracer, describe_context, describe_subagent, render_plan
 
 HELP = """Commands:
   /help          show this help
   /tools         list the tools the agent can use
+  /plan          show the agent's current plan
   /plugins       list the plugin files and the tools they added
   /reload        load the plugin files again (after editing one)
   /history       show the conversation so far
@@ -44,6 +45,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", metavar="NAME", help='Continue a saved conversation, e.g. --resume last.')
     parser.add_argument("--no-stream", action="store_true", help="Wait for whole replies instead of streaming them.")
     parser.add_argument("--no-plugins", action="store_true", help="Don't load tools from the plugin folders.")
+    parser.add_argument("--no-planning", action="store_true", help="Don't offer the model the update_plan tool.")
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the model the delegate tool.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
@@ -86,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
     if settings.subagents and not args.no_subagents:
         subagents.enable(agent)  # Adds the delegate tool (see subagents.py).
+    if settings.planning and not args.no_planning:
+        planning.enable(agent)  # Adds the update_plan tool (see planning.py).
     # Plugins go on top, from a loader that can load them again for /reload.
     loader = PluginLoader([] if args.no_plugins else settings.plugin_dirs, agent.tools)
     agent.tools = loader.load()
@@ -190,6 +194,13 @@ def _command(agent: Agent, line: str, sessions_dir: str = "sessions", loader: Pl
         agent.tools = loader.load()
         for line in loader.describe() or ["(no plugins found)"]:
             print(f"  {line}")
+    elif cmd == "/plan":
+        planner = planning.planner_of(agent)
+        if planner is None:
+            print("  (planning is off)")
+        else:
+            for line in render_plan(planner.steps).splitlines():
+                print(f"  {line}")
     elif cmd == "/history":
         for m in agent.history:
             if m.role == "tool":
@@ -279,6 +290,7 @@ class Printer:
             on_tool_result=self.tool_result,
             on_context=self.context,
             on_subagent=self.subagent,
+            on_plan=self.plan,
         )
 
     def turn_start(self, user_input: str) -> None:
@@ -315,6 +327,13 @@ class Printer:
             return
         self.end_line()
         print(f"  sub-agent> {describe_subagent(kind, details, 300 if self.verbose else 120)}")
+
+    def plan(self, steps: list[dict]) -> None:
+        self.end_line()
+        lines = render_plan(steps).splitlines()
+        print(f"  plan> {lines[0]}")
+        for line in lines[1:]:
+            print(f"        {line}")
 
 
 def _short(text: str, limit: int = 120) -> str:
