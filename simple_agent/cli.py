@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     if settings.planning and not args.no_planning:
         planning.enable(agent)  # Adds the update_plan tool (see planning.py).
     # Plugins go on top, from a loader that can load them again for /reload.
-    loader = PluginLoader([] if args.no_plugins else settings.plugin_dirs, agent.tools)
+    loader = PluginLoader([] if args.no_plugins else settings.plugin_dirs, agent.tools, settings.plugin_settings)
     agent.tools = loader.load()
     for line in loader.describe():
         print(f"({line})")

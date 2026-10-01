@@ -22,14 +22,18 @@ and saves one JSON file per run in eval_results/ so runs can be compared.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import tomllib
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +55,10 @@ class Task:
     checks: dict[str, Any]
     files: dict[str, str] = field(default_factory=dict)  # Created in the task's folder first.
     approve: list[str] = field(default_factory=lambda: ["write_file"])  # Tools allowed without asking.
+    # Web pages served on a local test server while the task runs ({path: content}).
+    # "{server}" in the prompt, files, pages and env is replaced by its address.
+    pages: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)  # Environment variables set during the task.
 
 
 # --- loading tasks -------------------------------------------------------------
@@ -78,6 +86,8 @@ def load_tasks(paths: list[str | Path]) -> list[Task]:
                 checks=entry["check"],
                 files=entry.get("files", {}),
                 approve=entry.get("approve", ["write_file"]),
+                pages=entry.get("pages", {}),
+                env=entry.get("env", {}),
             ))
     return tasks
 
@@ -94,6 +104,7 @@ class Run:
     tools_called: list[str]
     steps: int
     plan: list[dict] = field(default_factory=list)  # The final plan, if the agent made one.
+    pages_requested: list[str] = field(default_factory=list)  # Paths fetched from the task's test server.
 
 
 def _as_list(value) -> list:
@@ -180,6 +191,21 @@ def check_plan_completed(run: Run, expected: bool) -> tuple[bool, str]:
     return False, f"steps not done: {left}" if expected else "every step was done"
 
 
+def check_file_absent(run: Run, paths) -> tuple[bool, str]:
+    found = [p for p in _as_list(paths) if (run.folder / p).exists()]
+    return not found, f"file(s) {found} should not exist" if found else "ok"
+
+
+def check_tool_not_used(run: Run, names) -> tuple[bool, str]:
+    used = [n for n in _as_list(names) if n in run.tools_called]
+    return not used, f"called {used}" if used else "ok"
+
+
+def check_page_not_requested(run: Run, paths) -> tuple[bool, str]:
+    hits = [r for r in run.pages_requested for p in _as_list(paths) if p in r]
+    return not hits, f"requested {hits}" if hits else "ok"
+
+
 def check_max_steps(run: Run, limit: int) -> tuple[bool, str]:
     return run.steps <= limit, "ok" if run.steps <= limit else f"took {run.steps} steps (limit {limit})"
 
@@ -194,6 +220,9 @@ CHECKS = {
     "file_contains": check_file_contains,
     "file_matches": check_file_matches,  # {path = regex or list of regexes}, ignoring case.
     "tool_used": check_tool_used,
+    "tool_not_used": check_tool_not_used,  # E.g. a planted instruction tried to make it read a file.
+    "file_absent": check_file_absent,
+    "page_not_requested": check_page_not_requested,  # No request to the test server contained this text.
     "max_steps": check_max_steps,  # At most this many model calls.
     "plan_made": check_plan_made,  # true: the agent used update_plan (planning.py).
     "plan_completed": check_plan_completed,  # true: every step of its plan ended up done.
@@ -220,11 +249,13 @@ def run_task(task: Task, make_agent, log=print) -> dict:
             helpers.append(dict(details))
 
     home = os.getcwd()
-    with tempfile.TemporaryDirectory(prefix="simple-agent-eval-") as tmp:
+    requests: list[str] = []  # Paths fetched from the test server.
+    with tempfile.TemporaryDirectory(prefix="simple-agent-eval-") as tmp, _serve(task.pages, requests) as server:
+        fill = lambda text: text.replace("{server}", server)  # noqa: E731
         folder = Path(tmp)
         for path, content in task.files.items():
             (folder / path).parent.mkdir(parents=True, exist_ok=True)
-            (folder / path).write_text(content, encoding="utf-8")
+            (folder / path).write_text(fill(content), encoding="utf-8")
 
         agent: Agent = make_agent()
         agent.events = AgentEvents(
@@ -236,17 +267,24 @@ def run_task(task: Task, make_agent, log=print) -> dict:
         started = time.perf_counter()
         error = None
         os.chdir(folder)  # The tools use relative paths, so the task works inside its own folder.
+        saved_env = {key: os.environ.get(key) for key in task.env}
+        os.environ.update({key: fill(value) for key, value in task.env.items()})
         try:
-            answer = agent.ask(task.prompt)
+            answer = agent.ask(fill(task.prompt))
         except Exception as exc:  # noqa: BLE001 - a failed call fails the task, not the run
             answer, error = "", f"{type(exc).__name__}: {exc}"
         finally:
             os.chdir(home)
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
         seconds = time.perf_counter() - started
 
         planner = planning.planner_of(agent)
         plan = planner.steps if planner else []
-        run = Run(answer, folder, tools_called, steps, plan)
+        run = Run(answer, folder, tools_called, steps, plan, requests)
         checks = {}
         for name, expected in task.checks.items():
             passed, detail = CHECKS[name](run, expected)
@@ -263,6 +301,7 @@ def run_task(task: Task, make_agent, log=print) -> dict:
         "tools_called": tools_called,
         "subagents": helpers,
         "plan": plan,
+        "pages_requested": requests,
         "input_tokens": agent.usage.get("input_tokens", 0),
         "output_tokens": agent.usage.get("output_tokens", 0),
         "seconds": round(seconds, 2),
@@ -270,6 +309,44 @@ def run_task(task: Task, make_agent, log=print) -> dict:
     }
     log(_result_line(result))
     return result
+
+
+@contextlib.contextmanager
+def _serve(pages: dict[str, str], requests: list[str]):
+    """Serve `pages` on a local port for one task; yields its address ("" if no pages)."""
+    if not pages:
+        yield ""
+        return
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = urllib.parse.urlsplit(self.path).path.lstrip("/")  # The query string is ignored.
+            requests.append(self.path)
+            if path not in served:
+                self.send_error(404)
+                return
+            body = served[path].encode("utf-8")
+            kind = {"html": "text/html", "json": "application/json"}.get(path.rsplit(".", 1)[-1], "text/plain")
+            if path.endswith("search"):  # A stand-in for SearXNG's /search endpoint.
+                kind = "application/json"
+            self.send_response(200)
+            self.send_header("Content-Type", f"{kind}; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    address = f"http://127.0.0.1:{server.server_port}"
+    served = {path.lstrip("/"): content.replace("{server}", address) for path, content in pages.items()}
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield address
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def run_tasks(tasks: list[Task], make_agent, repeat: int = 1, log=print) -> dict:
@@ -385,7 +462,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # The same tools as the chat: built-ins plus plugins. (MCP servers are
     # left out so every run starts quickly and the same way.)
-    tools: ToolRegistry = PluginLoader([] if args.no_plugins else settings.plugin_dirs, default_tools).load()
+    tools: ToolRegistry = PluginLoader(
+        [] if args.no_plugins else settings.plugin_dirs, default_tools, settings.plugin_settings
+    ).load()
 
     use_subagents = settings.subagents and not args.no_subagents
     use_planning = settings.planning and not args.no_planning

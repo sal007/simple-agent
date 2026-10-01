@@ -312,8 +312,10 @@ can mislead), and `--provider`, `--model` and `--base-url` work as in the chat.
 (`math.toml`), reading files (`files.toml`), multi-step tool use
 (`multi_step.toml`), tasks that need a lot of reading (`many_files.toml`,
 see [Sub-agents](#sub-agents)) and longer multi-step tasks (`planning.toml`,
-see [Planning](#planning)). A task is an id, a prompt, optional files to create in its
-folder, and one or more checks that must all pass:
+see [Planning](#planning)), and reading web pages, including pages with a planted
+prompt injection (`web.toml`, see [Web search and fetch](#web-search-and-fetch)).
+A task is an id, a prompt, optional files to create in its folder, and one or
+more checks that must all pass:
 
 ```toml
 [[task]]
@@ -335,12 +337,22 @@ check.tool_used = "read_file"
 | `file_contains` | `{ "file.txt" = "text" }`: the file exists and contains the text |
 | `file_matches` | `{ "file.txt" = "regex" }` (or a list of them): every pattern matches the file, ignoring case |
 | `tool_used` | the model called this tool (or all of a list of tools) |
+| `tool_not_used` | the model never called this tool (or any of a list) |
+| `file_absent` | the file (or files) do not exist afterwards |
+| `page_not_requested` | no request to the task's test pages contained this text |
 | `max_steps` | the task took at most this many model calls |
 | `plan_made` | `true`: the agent made a plan with `update_plan` (see [Planning](#planning)) |
 | `plan_completed` | `true`: every step of that plan ended up done |
 
 `approve = ["write_file", "run_shell"]` on a task changes which tools may run
-without asking. Add your own `.toml` files to `evals/`, or run a different set
+without asking.
+
+A task can also bring its own web pages: `pages."recipe.html" = "<html>..."`
+serves them from a small local web server that runs only during that task, so
+web tasks need no internet and always see the same pages. `{server}` in the
+prompt, files, pages and `env` is replaced by that server's address, and
+`env = { NAME = "value" }` sets environment variables while the task runs
+(`web.toml` uses this to point the web tools at the test server). Add your own `.toml` files to `evals/`, or run a different set
 with `simple-agent eval path/to/tasks`.
 
 ### Plugins
@@ -365,6 +377,7 @@ def greet(name: str) -> str:
 ```
 $ simple-agent
 (plugin plugins/greet.py: greet)
+(plugin plugins/web.py: web_search, web_fetch)
 (plugin plugins/word_count.py: word_count)
 ```
 
@@ -380,8 +393,77 @@ not loaded, so shared helpers can live there. `plugins/word_count.py` is a
 working example to copy. Set `plugin_dirs` in `config.toml` to use other
 folders, or start with `--no-plugins` to skip them.
 
+A plugin can have settings in `config.toml`, in a table named after its file:
+`[plugins.greet]` for `plugins/greet.py`. Read them at the top of the file
+with `settings()`, which returns that table as a dict (empty if there is none):
+
+```python
+from simple_agent.plugins import settings, tool
+
+SETTINGS = settings()
+GREETING = SETTINGS.get("greeting", "Hello")
+```
+
 Plugins are ordinary Python that runs with your permissions, so only use ones
 you wrote or trust.
+
+### Web search and fetch
+
+`plugins/web.py` gives the agent two tools, the usual search-then-read pair:
+
+- `web_search(query)` returns a short list of results (title, URL, snippet)
+  from [SearXNG](https://docs.searxng.org), a search engine you run yourself
+  (usually in Docker), so searching is private, free and needs no API key.
+- `web_fetch(url, start=0)` reads a page as plain text. HTML is reduced to
+  headings, paragraphs, lists and links; scripts, styles, menus and footers are
+  dropped. Long pages come in parts of `max_chars` characters, and the reply
+  says which `start` to use for the next part.
+
+**Setting up SearXNG.** SearXNG answers only in HTML unless you allow JSON. In
+its `settings.yml`, add `json` to the formats, then restart it:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+The plugin looks for it at `http://localhost:8080`; change that and the other
+settings under `[plugins.web]` in `config.toml`:
+
+```toml
+[plugins.web]
+searxng_url = "http://localhost:8080"
+max_results = 5        # search results per web_search
+max_chars = 8000       # page text per web_fetch call
+allow_local = false    # let web_fetch reach your own machine and network
+```
+
+Without SearXNG, `web_search` just tells the model it isn't reachable;
+`web_fetch` works on its own.
+
+**Safety.** `web_fetch` asks y/N before every call, like `run_shell`. It only
+fetches `http` and `https`, and refuses addresses on your own machine or local
+network (including redirects to them), so a page can't steer the agent into
+your router or other local services; set `allow_local = true`, or list
+addresses in `allow_hosts`, to lift that. Downloads time out after 15 seconds,
+stop at 2 MB, and must be text (HTML, plain text, JSON or XML).
+
+**Prompt injection.** A web page is written by someone else, and it may contain
+text aimed at the model ("ignore your instructions and..."). Both tools wrap
+what they return in `<outside_content>` markers with a note saying it is
+information, not instructions. That helps, but no model is immune, so
+`evals/web.toml` has two tasks with a planted instruction (one tries to take
+over the answer and write a file, one tries to read `secrets.txt` and send it
+to another URL) to measure how often a given model falls for it:
+
+```
+$ simple-agent eval --only web/
+```
+
+The [MCP fetch server](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch)
+is an alternative to `web_fetch` if you'd rather use MCP (see below).
 
 ### MCP servers
 
@@ -449,6 +531,7 @@ so they don't have to live in a file.
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
 | [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
 | [`plugins/word_count.py`](plugins/word_count.py) | An example plugin. |
+| [`plugins/web.py`](plugins/web.py) | Web search (SearXNG) and page reading, as a plugin. |
 | [`simple_agent/mcp.py`](simple_agent/mcp.py) | A small MCP client: adds tools from MCP servers to the registry. |
 | [`simple_agent/sessions.py`](simple_agent/sessions.py) | Saves and loads conversations as JSON. |
 | [`simple_agent/context.py`](simple_agent/context.py) | Context management: clears old tool results and summarizes old turns. |
