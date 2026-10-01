@@ -514,6 +514,18 @@ context management, MCP servers, plugin folders and where traces and sessions ar
 win over the file. API keys are read from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 so they don't have to live in a file.
 
+When a new version adds settings, your `config.toml` doesn't have them yet (the
+agent says so when it starts). Bring it up to date with:
+
+```
+$ simple-agent config            # list the settings your file is missing
+$ simple-agent config --update   # add them; the old file is kept as config.toml.bak
+```
+
+New settings are added with their comments and default values, so nothing
+behaves differently until you change them. Your own values are never touched,
+and a setting you commented out counts as present and stays commented out.
+
 ## How it works
 
 ```
@@ -529,6 +541,7 @@ so they don't have to live in a file.
 | [`simple_agent/providers/openai_compat.py`](simple_agent/providers/openai_compat.py) | Provider for LM Studio and any OpenAI-compatible server. |
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
+| [`simple_agent/config_update.py`](simple_agent/config_update.py) | `simple-agent config`: adds new settings to your `config.toml`. |
 | [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
 | [`plugins/word_count.py`](plugins/word_count.py) | An example plugin. |
 | [`plugins/web.py`](plugins/web.py) | Web search (SearXNG) and page reading, as a plugin. |

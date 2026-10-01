@@ -10,7 +10,7 @@ import sys
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import mcp, planning, sessions, subagents
+from . import config_update, mcp, planning, sessions, subagents
 from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
@@ -35,7 +35,7 @@ HELP = """Commands:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval (see simple-agent eval --help).")
+    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval. Add new settings to your config.toml with: simple-agent config.")
     parser.add_argument("--provider", choices=list(PROVIDER_DEFAULTS), help="Which backend to use.")
     parser.add_argument("--model", help="Model name, e.g. the id LM Studio shows, or claude-opus-5-5.")
     parser.add_argument("--base-url", help="API base URL for the openai provider (LM Studio, Ollama, ...).")
@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import evals
 
         return evals.main(argv[1:])
+    if argv[:1] == ["config"]:  # `simple-agent config` adds new settings to your config.toml.
+        return config_update.main(argv[1:])
     args = parse_args(argv)
     try:
         settings = resolve(load_file(args.config), args.provider, args.model, args.base_url)
@@ -126,6 +128,9 @@ def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, pro
 
     where = f" at {settings.base_url}" if settings.provider == "openai" else ""
     print(f"simple-agent {__version__} · {settings.provider} · {settings.model}{where}")
+    note = config_update.hint(args.config)  # Your config.toml is older than this version?
+    if note:
+        print(note)
     print("Type a message, or /help for commands.\n")
 
     while True:
