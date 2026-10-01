@@ -30,8 +30,10 @@ from typing import Any
 
 from .tools import ToolRegistry
 
-# While a plugin file is being run, @tool registers into this registry.
+# While a plugin file is being run, @tool registers into this registry and
+# settings() returns that file's [plugins.<name>] table from config.toml.
 _loading: ToolRegistry | None = None
+_loading_settings: dict[str, Any] = {}
 
 
 def tool(description: str, parameters: dict[str, Any] | None = None, confirm: bool = False):
@@ -39,6 +41,17 @@ def tool(description: str, parameters: dict[str, Any] | None = None, confirm: bo
     if _loading is None:
         raise RuntimeError("simple_agent.plugins.tool can only be used in a plugin file the agent is loading")
     return _loading.tool(description, parameters, confirm)
+
+
+def settings() -> dict[str, Any]:
+    """This plugin's settings: the [plugins.<file name>] table in config.toml.
+
+    For plugins/web.py that is [plugins.web]. Call it at the top of the plugin
+    file; it's empty if config.toml has no such table.
+    """
+    if _loading is None:
+        raise RuntimeError("simple_agent.plugins.settings can only be used in a plugin file the agent is loading")
+    return dict(_loading_settings)
 
 
 @dataclass
@@ -58,7 +71,7 @@ def find(dirs: list[str | Path]) -> list[Path]:
     return files
 
 
-def load(dirs: list[str | Path], registry: ToolRegistry) -> list[Plugin]:
+def load(dirs: list[str | Path], registry: ToolRegistry, config: dict[str, dict] | None = None) -> list[Plugin]:
     """Run every plugin file and add its tools to `registry`.
 
     A plugin that fails (a syntax error, a missing import, ...) is reported
@@ -66,20 +79,21 @@ def load(dirs: list[str | Path], registry: ToolRegistry) -> list[Plugin]:
     with the same name as an existing tool replaces it, which is handy for
     trying out a different description or implementation of a built-in.
     """
-    global _loading
+    global _loading, _loading_settings
     plugins = []
     for path in find(dirs):
         plugin = Plugin(path)
         plugins.append(plugin)
         collected = ToolRegistry()
         _loading = collected
+        _loading_settings = (config or {}).get(path.stem, {})
         try:
             _run_file(path)
         except Exception as exc:  # noqa: BLE001 - report any failure and carry on
             plugin.error = f"{type(exc).__name__}: {exc}"
             continue
         finally:
-            _loading = None
+            _loading, _loading_settings = None, {}
         registry.update(collected)
         plugin.tools = collected.names()
     return plugins
@@ -101,15 +115,16 @@ def _run_file(path: Path) -> None:
 class PluginLoader:
     """Loads plugins on top of a base set of tools, and can do it again for /reload."""
 
-    def __init__(self, dirs: list[str | Path], base: ToolRegistry):
+    def __init__(self, dirs: list[str | Path], base: ToolRegistry, config: dict[str, dict] | None = None):
         self.dirs = dirs
         self.base = base  # The built-in tools (and any MCP tools), never changed.
+        self.config = config or {}  # The [plugins.<name>] tables from config.toml.
         self.plugins: list[Plugin] = []
 
     def load(self) -> ToolRegistry:
         """A new registry: the base tools plus freshly loaded plugin tools."""
         registry = self.base.copy()
-        self.plugins = load(self.dirs, registry)
+        self.plugins = load(self.dirs, registry, self.config)
         return registry
 
     def describe(self) -> list[str]:

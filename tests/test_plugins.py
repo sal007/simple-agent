@@ -89,8 +89,9 @@ def test_decorator_only_works_while_loading():
 
 def test_the_example_plugin():
     registry = ToolRegistry()
-    (plugin,) = load([REPO_PLUGINS], registry)
-    assert plugin.tools == ["word_count"]
+    plugins = {p.path.name: p for p in load([REPO_PLUGINS], registry)}
+    assert plugins["word_count.py"].tools == ["word_count"]
+    assert plugins["web.py"].tools == ["web_search", "web_fetch"] and plugins["web.py"].error is None
     assert registry.run("word_count", {"text": "the cat and the hat", "top": 1}) == "5 words. Most common: the (2)"
 
 

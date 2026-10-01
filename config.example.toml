@@ -20,6 +20,17 @@ trace_dir = "traces"
 # Where /save, /load and --resume keep conversations.
 sessions_dir = "sessions"
 
+# Sub-agents: offer the model a "delegate" tool that runs a subtask in a fresh
+# helper agent (same as leaving out --no-subagents).
+subagents = true
+
+# Planning: offer the model an "update_plan" tool for a to-do list that is shown
+# to it at every step (same as leaving out --no-planning).
+planning = true
+
+# Folders to load plugin tools from (see "Plugins" in the README).
+# plugin_dirs = ["plugins", "~/.config/simple-agent/plugins"]
+
 [providers.openai]
 # LM Studio's local server. Ollama is http://localhost:11434/v1, OpenAI is https://api.openai.com/v1.
 base_url = "http://localhost:1234/v1"
@@ -53,13 +64,11 @@ keep_recent_turns = 2
 # trusted = false
 # env = { SOME_TOKEN = "..." }
 
-# Folders to load plugin tools from (see "Plugins" in the README).
-# plugin_dirs = ["plugins", "~/.config/simple-agent/plugins"]
-
-# Sub-agents: offer the model a "delegate" tool that runs a subtask in a fresh
-# helper agent (same as leaving out --no-subagents).
-subagents = true
-
-# Planning: offer the model an "update_plan" tool for a to-do list that is shown
-# to it at every step (same as leaving out --no-planning).
-planning = true
+# Settings for a plugin go in [plugins.<file name>]; the plugin reads them with settings().
+# plugins/web.py (web_search and web_fetch, see "Web search and fetch" in the README):
+# [plugins.web]
+# searxng_url = "http://localhost:8080"   # your SearXNG, with json enabled in its settings.yml
+# max_results = 5                         # search results per web_search
+# max_chars = 8000                        # page text per web_fetch call
+# allow_local = false                     # let web_fetch reach your own machine and network
+# allow_hosts = ["localhost:3000"]        # or just these local addresses

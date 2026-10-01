@@ -41,6 +41,7 @@ class Settings:
     plugin_dirs: list[str] = field(default_factory=lambda: list(DEFAULT_PLUGIN_DIRS))
     subagents: bool = True  # Offer the delegate tool (see subagents.py).
     planning: bool = True  # Offer the update_plan tool (see planning.py).
+    plugin_settings: dict[str, dict] = field(default_factory=dict)  # [plugins.<name>] tables.
 
 
 def load_file(path: str | None) -> dict:
@@ -86,6 +87,7 @@ def resolve(
         plugin_dirs=list(file_config.get("plugin_dirs", DEFAULT_PLUGIN_DIRS)),
         subagents=bool(file_config.get("subagents", True)),
         planning=bool(file_config.get("planning", True)),
+        plugin_settings=dict(file_config.get("plugins", {})),
     )
 
 
