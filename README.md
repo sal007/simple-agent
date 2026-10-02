@@ -443,6 +443,21 @@ allow_local = false    # let web_fetch reach your own machine and network
 Without SearXNG, `web_search` just tells the model it isn't reachable;
 `web_fetch` works on its own.
 
+**No results?** SearXNG asks other search engines (Google, DuckDuckGo, ...) and
+returns nothing when they all block it or time out. `web_search` then lists
+the engines that failed and why (for example `google (CAPTCHA)`). To see what
+SearXNG itself returns:
+
+```
+curl 'http://localhost:8080/search?q=test&format=json' | python3 -m json.tool | less
+```
+
+Look at `results` and `unresponsive_engines`. If engines keep failing, turn on
+others in SearXNG's settings.yml (or under Preferences, Engines in its web page),
+or wait a while if one has rate-limited you. A "429 Too Many Requests" error is
+SearXNG's own bot limiter; set `server.limiter: false` in its settings.yml for
+a private instance.
+
 **Safety.** `web_fetch` asks y/N before every call, like `run_shell`. It only
 fetches `http` and `https`, and refuses addresses on your own machine or local
 network (including redirects to them), so a page can't steer the agent into
