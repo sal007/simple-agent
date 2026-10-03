@@ -10,7 +10,7 @@ import sys
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import config_update, mcp, planning, sessions, subagents
+from . import config_update, instructions, mcp, planning, sessions, subagents
 from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
@@ -23,6 +23,7 @@ HELP = """Commands:
   /help          show this help
   /tools         list the tools the agent can use
   /plan          show the agent's current plan
+  /instructions  show the project instructions (AGENTS.md) the agent follows
   /plugins       list the plugin files and the tools they added
   /reload        load the plugin files again (after editing one)
   /history       show the conversation so far
@@ -50,6 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-plugins", action="store_true", help="Don't load tools from the plugin folders.")
     parser.add_argument("--no-planning", action="store_true", help="Don't offer the model the update_plan tool.")
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the model the delegate tool.")
+    parser.add_argument("--no-instructions", action="store_true", help="Don't read AGENTS.md project instructions.")
     parser.add_argument("--no-usage", action="store_true", help="Don't show tokens and cost after each answer.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
@@ -92,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
         for message in messages:
             print(f"({message})")
     agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
+    if settings.project_instructions and not args.no_instructions:
+        project = instructions.enable(agent)  # AGENTS.md files join the system prompt.
+        for line in project.describe():
+            print(f"(project instructions: {line})")
     if settings.subagents and not args.no_subagents:
         subagents.enable(agent)  # Adds the delegate tool (see subagents.py).
     if settings.planning and not args.no_planning:
@@ -225,6 +231,16 @@ def _command(
             else:
                 calls = "".join(f" [calls {c.name}]" for c in m.tool_calls)
                 print(f"  [{m.role}] {_short(m.content)}{calls}")
+    elif cmd == "/instructions":
+        project = instructions.instructions_of(agent)
+        if not project:
+            print("  (project instructions are off)")
+        elif not project.files():
+            print(f"  (no {instructions.FILE_NAME} here; create one to give the agent rules for this project)")
+        else:
+            for path in project.files():
+                print(f"  --- {path} ---")
+                print("  " + project.read(path).replace("\n", "\n  "))
     elif cmd == "/usage":
         meter = meter or UsageMeter(model=getattr(agent.provider, "model", ""))
         arg = rest[0].strip().lower() if rest else ""

@@ -28,6 +28,11 @@ subagents = true
 # to it at every step (same as leaving out --no-planning).
 planning = true
 
+# Project instructions: follow the rules in AGENTS.md files (this folder, the folders above
+# it up to the top of the git repository, and ~/.config/simple-agent/AGENTS.md).
+# Same as leaving out --no-instructions; /instructions in the chat shows what was read.
+project_instructions = true
+
 # After each answer, show the tokens it used (and the cost, for models with a price)
 # plus the session total (same as leaving out --no-usage; /usage on|off in the chat).
 show_usage = true

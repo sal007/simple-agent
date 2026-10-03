@@ -67,6 +67,7 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 | `/plugins`     | list plugin files and their tools |
 | `/reload`      | load the plugin files again       |
 | `/history`     | show the conversation so far      |
+| `/instructions` | the project instructions (AGENTS.md) in use |
 | `/usage`       | tokens (and cost) this session    |
 | `/usage on\|off` | show or hide the line after each answer |
 | `/reset`       | start a new conversation          |
@@ -81,6 +82,46 @@ Replies stream in as the model writes them. Add `--no-stream` to wait for whole
 replies instead (useful if a server doesn't support streaming). Add `-v` to also
 see what each tool returned. Pass a question as arguments to
 ask once and exit: `simple-agent "what files are in this folder?"`.
+
+### Project instructions (AGENTS.md)
+
+Put an `AGENTS.md` file in a project folder, and the agent follows it whenever
+you start it there, without you retyping anything:
+
+```markdown
+# Rules for this project
+- Run the tests with `pytest -q` after changing any code.
+- Never edit files in data/raw/.
+- Write in British English.
+```
+
+```
+$ simple-agent
+(project instructions: AGENTS.md (127 characters))
+```
+
+The text goes at the end of the system prompt, so the model sees it at every
+step, even after [context management](#context-management) has trimmed the
+conversation. [Sub-agents](#sub-agents) get it too. The file is read again
+when it changes, so edits count from your next message, no restart needed.
+`/instructions` shows exactly what was read.
+
+Files are read in this order, so the one closest to where you are has the
+last word:
+
+1. `~/.config/simple-agent/AGENTS.md`: your personal rules for every project.
+2. `AGENTS.md` in the top folder of the git repository you're in, then in each
+   folder below it, down to the one you started in. Outside a git repository,
+   only the folder you started in is checked.
+
+[AGENTS.md](https://agents.md) is a shared convention that other coding agents
+read too, so one file serves all of them. Each file is cut off at 20,000
+characters so a huge one can't crowd out the conversation. Turn it off with
+`project_instructions = false` in `config.toml` or `--no-instructions`.
+
+To see how well a model follows such rules, `evals/instructions.toml` has
+tasks whose folder holds an `AGENTS.md` with a rule the prompt doesn't mention
+(compare with `--no-instructions`).
 
 ### Tokens and cost
 
@@ -349,7 +390,10 @@ can mislead), and `--provider`, `--model` and `--base-url` work as in the chat.
 (`multi_step.toml`), tasks that need a lot of reading (`many_files.toml`,
 see [Sub-agents](#sub-agents)) and longer multi-step tasks (`planning.toml`,
 see [Planning](#planning)), and reading web pages, including pages with a planted
-prompt injection (`web.toml`, see [Web search and fetch](#web-search-and-fetch)).
+prompt injection (`web.toml`, see [Web search and fetch](#web-search-and-fetch)),
+and following an `AGENTS.md` in the task's folder (`instructions.toml`, see
+[Project instructions](#project-instructions-agentsmd); your personal
+`~/.config/simple-agent/AGENTS.md` is not used in evals).
 A task is an id, a prompt, optional files to create in its folder, and one or
 more checks that must all pass:
 
@@ -578,6 +622,7 @@ and a setting you commented out counts as present and stays commented out.
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
 | [`simple_agent/config_update.py`](simple_agent/config_update.py) | `simple-agent config`: adds new settings to your `config.toml`. |
+| [`simple_agent/instructions.py`](simple_agent/instructions.py) | Reads AGENTS.md project instructions into the system prompt. |
 | [`simple_agent/usage.py`](simple_agent/usage.py) | Counts tokens and cost per turn, with built-in Claude prices. |
 | [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
 | [`plugins/word_count.py`](plugins/word_count.py) | An example plugin. |

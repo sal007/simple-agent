@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__, planning, subagents, usage
+from . import __version__, instructions, planning, subagents, usage
 from .agent import Agent, AgentEvents
 from .config import load_file, resolve
 from .plugins import PluginLoader
@@ -446,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="eval_results", help="Where to save the results (default: eval_results/).")
     parser.add_argument("--no-plugins", action="store_true", help="Don't load plugin tools.")
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the delegate tool.")
+    parser.add_argument("--no-instructions", action="store_true", help="Don't read AGENTS.md files in task folders.")
     parser.add_argument("--no-planning", action="store_true", help="Don't offer the update_plan tool.")
     parser.add_argument("--compare", nargs="+", metavar="RESULTS", help="Compare saved results files instead of running.")
     args = parser.parse_args(argv)
@@ -473,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
 
     use_subagents = settings.subagents and not args.no_subagents
     use_planning = settings.planning and not args.no_planning
+    use_instructions = settings.project_instructions and not args.no_instructions
 
     def make_agent() -> Agent:
         agent = Agent(
@@ -483,6 +485,10 @@ def main(argv: list[str] | None = None) -> int:
             stream=False,
             context=settings.context,
         )
+        if use_instructions:
+            # Only AGENTS.md files in the task's own folder: not your personal
+            # file, so results don't depend on who runs the evals.
+            instructions.enable(agent, instructions.ProjectInstructions(user_file=None))
         if use_subagents:
             subagents.enable(agent)
         if use_planning:
@@ -503,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
         "tools": make_agent().tools.names(),
         "subagents": use_subagents,
         "planning": use_planning,
+        "project_instructions": use_instructions,
         **run,
     }
     print(f"Results saved to {save(run, args.out, provider)}")

@@ -43,6 +43,7 @@ class Settings:
     subagents: bool = True  # Offer the delegate tool (see subagents.py).
     planning: bool = True  # Offer the update_plan tool (see planning.py).
     plugin_settings: dict[str, dict] = field(default_factory=dict)  # [plugins.<name>] tables.
+    project_instructions: bool = True  # Read AGENTS.md files (see instructions.py).
     show_usage: bool = True  # Print tokens (and cost) after each answer (see usage.py).
     prices: dict[str, tuple[float, float]] = field(default_factory=lambda: dict(DEFAULT_PRICES))
 
@@ -91,6 +92,7 @@ def resolve(
         subagents=bool(file_config.get("subagents", True)),
         planning=bool(file_config.get("planning", True)),
         plugin_settings=dict(file_config.get("plugins", {})),
+        project_instructions=bool(file_config.get("project_instructions", True)),
         show_usage=bool(file_config.get("show_usage", True)),
         prices=prices_from_config(file_config.get("prices", {})),
     )
