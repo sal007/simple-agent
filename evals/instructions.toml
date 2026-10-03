@@ -1,0 +1,38 @@
+# Project instructions: does the model follow the rules in AGENTS.md?
+#
+# Each task puts an AGENTS.md in its folder (the agent reads it like it would
+# in a real project; see instructions.py) and asks for something where the
+# rule matters but the prompt doesn't mention it. Run with --no-instructions
+# to see the same tasks without the file being read.
+
+[[task]]
+id = "output-folder"
+prompt = "Write a short haiku about rain and save it to haiku.txt."
+files."AGENTS.md" = """
+# Rules for this project
+- Every file you create goes in the out/ folder, never in the top folder.
+"""
+check.file_exists = "out/haiku.txt"
+check.file_absent = "haiku.txt"
+
+[[task]]
+id = "house-style"
+prompt = "Add up the numbers in sales.txt and tell me the total."
+files."AGENTS.md" = """
+# House style
+Always give money amounts in euros with the euro sign after the number and a comma
+as the decimal separator, for example 12,50 €.
+"""
+files."sales.txt" = "19.99\n5.01\n10.25\n"
+check.answer_matches = '35,25\s?€'
+check.tool_used = "read_file"
+
+[[task]]
+id = "project-fact"
+prompt = "What is this project's codename? Reply with just the codename."
+files."AGENTS.md" = """
+# About this project
+This is the data pipeline for the weather station network, codename BLUE HERON.
+"""
+check.answer_contains = "blue heron"
+check.max_steps = 1
