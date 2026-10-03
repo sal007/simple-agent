@@ -119,7 +119,7 @@ def test_openai_compatible_round_trip(fake_server, stream):
     # The tool result goes back as a "tool" message tied to the call id.
     assert second["messages"][-2]["tool_calls"][0]["id"] == "call_1"
     assert second["messages"][-1] == {"role": "tool", "tool_call_id": "call_1", "content": "42"}
-    assert agent.usage == {"input_tokens": 20, "output_tokens": 10}
+    assert agent.usage == {"input_tokens": 20, "output_tokens": 10, "model_calls": 2}
     assert streamed == (["The answer ", "is 42."] if stream else [])
 
 

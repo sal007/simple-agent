@@ -111,6 +111,7 @@ class Agent:
             self.events.on_model_reply(step, reply)
             for key, value in reply.usage.items():
                 self.usage[key] = self.usage.get(key, 0) + value
+            self.usage["model_calls"] = self.usage.get("model_calls", 0) + 1  # For the per-turn line (usage.py).
             self.history.append(reply.message)
 
             if not reply.message.tool_calls:

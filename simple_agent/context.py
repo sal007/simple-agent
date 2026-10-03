@@ -137,6 +137,7 @@ class ContextManager:
             return False
         for key, value in reply.usage.items():
             agent.usage[key] = agent.usage.get(key, 0) + value
+        agent.usage["model_calls"] = agent.usage.get("model_calls", 0) + 1
 
         match = re.search(r"<summary>(.*?)</summary>", reply.message.content, re.DOTALL)
         summary = (match.group(1) if match else reply.message.content).strip()

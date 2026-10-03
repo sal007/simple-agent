@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__, planning, subagents
+from . import __version__, planning, subagents, usage
 from .agent import Agent, AgentEvents
 from .config import load_file, resolve
 from .plugins import PluginLoader
@@ -232,7 +232,7 @@ CHECKS = {
 # --- running -------------------------------------------------------------------
 
 
-def run_task(task: Task, make_agent, log=print) -> dict:
+def run_task(task: Task, make_agent, log=print, prices: dict | None = None) -> dict:
     """Run one task in a fresh temporary folder and return its result."""
     tools_called: list[str] = []  # By the agent and by any sub-agents it starts.
     helpers: list[dict] = []  # One entry per sub-agent: its task, answer and steps.
@@ -304,6 +304,8 @@ def run_task(task: Task, make_agent, log=print) -> dict:
         "pages_requested": requests,
         "input_tokens": agent.usage.get("input_tokens", 0),
         "output_tokens": agent.usage.get("output_tokens", 0),
+        "model_calls": agent.usage.get("model_calls", 0),  # Including sub-agents' calls.
+        "cost_usd": usage.cost(agent.usage, getattr(agent.provider, "model", ""), prices or usage.DEFAULT_PRICES),
         "seconds": round(seconds, 2),
         "messages": [_message_dict(m) for m in agent.history],
     }
@@ -349,9 +351,9 @@ def _serve(pages: dict[str, str], requests: list[str]):
         server.server_close()
 
 
-def run_tasks(tasks: list[Task], make_agent, repeat: int = 1, log=print) -> dict:
+def run_tasks(tasks: list[Task], make_agent, repeat: int = 1, log=print, prices: dict | None = None) -> dict:
     """Run every task `repeat` times. Returns the results and a summary."""
-    results = [run_task(task, make_agent, log) for _ in range(repeat) for task in tasks]
+    results = [run_task(task, make_agent, log, prices) for _ in range(repeat) for task in tasks]
     summary = summarize(results)
     log(_summary_line(summary))
     return {"results": results, "summary": summary}
@@ -367,6 +369,8 @@ def summarize(results: list[dict]) -> dict:
         "steps": sum(r["steps"] for r in results),
         "input_tokens": sum(r["input_tokens"] for r in results),
         "output_tokens": sum(r["output_tokens"] for r in results),
+        # None when the model has no price (a local model).
+        "cost_usd": None if any(r.get("cost_usd") is None for r in results) else sum(r["cost_usd"] for r in results),
         "seconds": round(sum(r["seconds"] for r in results), 2),
     }
 
@@ -422,7 +426,8 @@ def _result_line(r: dict) -> str:
 def _summary_line(s: dict) -> str:
     return (
         f"\n{s['passed']}/{s['tasks']} passed ({s['score']:.0%}), {s['steps']} steps, "
-        f"{s['input_tokens']} input + {s['output_tokens']} output tokens, {s['seconds']}s"
+        f"{s['input_tokens']} input + {s['output_tokens']} output tokens"
+        f"{', ' + usage.format_dollars(s['cost_usd']) if s.get('cost_usd') is not None else ''}, {s['seconds']}s"
     )
 
 
@@ -486,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Running {len(tasks)} tasks x{args.repeat} on {settings.provider} · {settings.model}\n")
     started_at = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
-    run = run_tasks(tasks, make_agent, args.repeat)
+    run = run_tasks(tasks, make_agent, args.repeat, prices=settings.prices)
     run = {
         "provider": settings.provider,
         "model": settings.model,
