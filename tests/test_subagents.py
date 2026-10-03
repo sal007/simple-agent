@@ -66,7 +66,7 @@ def test_delegate_runs_a_fresh_helper_and_returns_only_its_answer(tmp_path, monk
     assert main_second["messages"][-1].content == "The secret word is 'pineapple'."
     assert all("filler" not in m.content for m in agent.history)
     # The helper's tokens count toward the session.
-    assert agent.usage == {"input_tokens": 400, "output_tokens": 40}
+    assert agent.usage == {"input_tokens": 400, "output_tokens": 40, "model_calls": 4}
     assert [kind for kind, _ in events] == ["start", "tool_call", "tool_result", "end"]
     assert events[-1][1]["steps"] == 2
 

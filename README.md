@@ -67,7 +67,8 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 | `/plugins`     | list plugin files and their tools |
 | `/reload`      | load the plugin files again       |
 | `/history`     | show the conversation so far      |
-| `/usage`       | tokens used this session          |
+| `/usage`       | tokens (and cost) this session    |
+| `/usage on\|off` | show or hide the line after each answer |
 | `/reset`       | start a new conversation          |
 | `/context`     | how big the conversation is       |
 | `/compact`     | summarize older turns now         |
@@ -80,6 +81,41 @@ Replies stream in as the model writes them. Add `--no-stream` to wait for whole
 replies instead (useful if a server doesn't support streaming). Add `-v` to also
 see what each tool returned. Pass a question as arguments to
 ask once and exit: `simple-agent "what files are in this folder?"`.
+
+### Tokens and cost
+
+After each answer the agent shows what that turn used and the session total:
+
+```
+you> what is 6*7?
+agent> 42.
+(this turn: 2 model calls, 2,000 in + 100 out tokens, $0.0100 · session: 2,000 in + 100 out tokens, $0.0100)
+```
+
+A turn is often more than one model call: one per round of tool calls, plus
+any [sub-agent](#sub-agents) calls and [compaction](#context-management), all
+counted here. "In" tokens grow every call, because each request resends the
+whole conversation, which is what [context management](#context-management)
+keeps in check.
+
+The cost is tokens times the model's price. Current Claude models' prices are
+built in (`simple_agent/usage.py`); for any other model add one in
+`config.toml`:
+
+```toml
+[prices]
+"some-cloud-model" = { input = 1.00, output = 4.00 }   # dollars per million tokens
+```
+
+Local models (LM Studio, Ollama) have no price, so the line shows tokens only.
+The token counts are what the server reports; some local servers don't report
+them when streaming, in which case they show as 0.
+
+Turn the line off with `show_usage = false` in `config.toml` or `--no-usage`,
+or switch it during a chat with `/usage off` and `/usage on`. `/usage` on its
+own shows the session total. Trace logs record each turn's totals (the
+`turn_end` record), and eval results include `model_calls` and `cost_usd` per
+task.
 
 ### Saved sessions
 
@@ -542,6 +578,7 @@ and a setting you commented out counts as present and stays commented out.
 | [`simple_agent/providers/anthropic_provider.py`](simple_agent/providers/anthropic_provider.py) | Provider for Claude via the Anthropic SDK. |
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
 | [`simple_agent/config_update.py`](simple_agent/config_update.py) | `simple-agent config`: adds new settings to your `config.toml`. |
+| [`simple_agent/usage.py`](simple_agent/usage.py) | Counts tokens and cost per turn, with built-in Claude prices. |
 | [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
 | [`plugins/word_count.py`](plugins/word_count.py) | An example plugin. |
 | [`plugins/web.py`](plugins/web.py) | Web search (SearXNG) and page reading, as a plugin. |

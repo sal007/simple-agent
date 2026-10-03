@@ -72,6 +72,7 @@ class Tracer:
 
     def turn_start(self, user_input: str) -> None:
         self._turn_base = self._sent
+        self._turn_usage: dict[str, int] = {}  # Tokens and model calls this turn, logged at turn_end.
         self._log("turn_start", user_input=user_input)
 
     def model_request(self, step: int, messages: list[Message]) -> None:
@@ -90,6 +91,7 @@ class Tracer:
         self._print(f"step {step}: reply in {seconds:.2f}s, stop={reply.stop_reason or '?'}, tokens: {tokens}")
         if reply.message.content:
             self._print(f"  text: {_short(reply.message.content, 300)}")
+        self._add_usage({**reply.usage, "model_calls": 1})
         self._log(
             "reply",
             step=step,
@@ -109,7 +111,13 @@ class Tracer:
         self._log("tool", name=call.name, arguments=call.arguments, result=result, seconds=round(seconds, 4))
 
     def turn_end(self, answer: str) -> None:
-        self._log("turn_end", answer=answer)
+        self._log("turn_end", answer=answer, usage=getattr(self, "_turn_usage", {}))
+
+    def _add_usage(self, usage: dict) -> None:
+        turn = self.__dict__.setdefault("_turn_usage", {})
+        for key in ("input_tokens", "output_tokens", "model_calls"):
+            if key in usage:
+                turn[key] = turn.get(key, 0) + usage[key]
 
     def error(self, error: BaseException) -> None:
         self._sent = self._turn_base  # The agent drops a failed turn from its history.
@@ -132,6 +140,8 @@ class Tracer:
         # never joins this one), but its tool calls and its answer are.
         self._print(f"  sub-agent {describe_subagent(kind, details, 300)}")
         self._log("subagent", kind=kind, **details)
+        if kind == "end":
+            self._add_usage(details)  # The helper's tokens count toward this turn.
 
     def plan(self, steps: list[dict]) -> None:
         # The plan is also added to the system prompt from now on.

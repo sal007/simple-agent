@@ -15,6 +15,8 @@ from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
 from .tools import default_tools
+from . import usage
+from .usage import UsageMeter
 from .trace import Tracer, describe_context, describe_subagent, render_plan
 
 HELP = """Commands:
@@ -24,7 +26,8 @@ HELP = """Commands:
   /plugins       list the plugin files and the tools they added
   /reload        load the plugin files again (after editing one)
   /history       show the conversation so far
-  /usage         show tokens used this session
+  /usage         show tokens (and cost) used this session
+  /usage on|off  show or hide the tokens/cost line after each answer
   /reset         start a new conversation
   /context       show how big the conversation is and the context settings
   /compact       summarize older turns now (keeps the last few word for word)
@@ -47,6 +50,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-plugins", action="store_true", help="Don't load tools from the plugin folders.")
     parser.add_argument("--no-planning", action="store_true", help="Don't offer the model the update_plan tool.")
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the model the delegate tool.")
+    parser.add_argument("--no-usage", action="store_true", help="Don't show tokens and cost after each answer.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -106,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, provider, loader: PluginLoader) -> int:
     """Everything after setup: trace mode, --resume, then one question or the REPL."""
+    meter = UsageMeter(settings.model, settings.prices, show=settings.show_usage and not args.no_usage)
     trace = settings.trace if args.trace is None else args.trace
     if trace:
         # The tracer prints each step itself (whole replies, not streamed),
@@ -124,7 +129,7 @@ def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, pro
         print(f"(resumed {args.resume}: {len(agent.history)} messages, saved {data['saved_at']})")
 
     if args.prompt:  # One-shot mode: simple-agent "what time is it?"
-        return 0 if _ask(agent, printer, " ".join(args.prompt)) else 1
+        return 0 if _ask(agent, printer, " ".join(args.prompt), meter) else 1
 
     where = f" at {settings.base_url}" if settings.provider == "openai" else ""
     print(f"simple-agent {__version__} · {settings.provider} · {settings.model}{where}")
@@ -142,10 +147,10 @@ def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, pro
         if not line:
             continue
         if line.startswith("/"):
-            if _command(agent, line, settings.sessions_dir, loader) == "exit":
+            if _command(agent, line, settings.sessions_dir, loader, meter) == "exit":
                 break
             continue
-        _ask(agent, printer, line)
+        _ask(agent, printer, line, meter)
 
     if agent.history:  # So `--resume last` always picks up where you left off.
         path = sessions.save(agent, sessions.session_path(settings.sessions_dir, "last"))
@@ -153,7 +158,9 @@ def _run(args: argparse.Namespace, settings, agent: Agent, printer: Printer, pro
     return 0
 
 
-def _ask(agent: Agent, printer: Printer, text: str) -> bool:
+def _ask(agent: Agent, printer: Printer, text: str, meter: UsageMeter | None = None) -> bool:
+    if meter:
+        meter.start_turn(agent.usage)
     try:
         answer = agent.ask(text)
     except KeyboardInterrupt:
@@ -171,10 +178,15 @@ def _ask(agent: Agent, printer: Printer, text: str) -> bool:
         print()  # The answer is already on screen; just leave a blank line.
     else:
         print(f"agent> {answer}\n")
+    if meter and meter.show:
+        print(f"{meter.turn_line(agent.usage)}\n")
     return True
 
 
-def _command(agent: Agent, line: str, sessions_dir: str = "sessions", loader: PluginLoader | None = None) -> str | None:
+def _command(
+    agent: Agent, line: str, sessions_dir: str = "sessions", loader: PluginLoader | None = None,
+    meter: UsageMeter | None = None,
+) -> str | None:
     cmd, *rest = line.split(maxsplit=1)
     cmd = cmd.lower()
     if cmd in ("/exit", "/quit"):
@@ -214,7 +226,17 @@ def _command(agent: Agent, line: str, sessions_dir: str = "sessions", loader: Pl
                 calls = "".join(f" [calls {c.name}]" for c in m.tool_calls)
                 print(f"  [{m.role}] {_short(m.content)}{calls}")
     elif cmd == "/usage":
-        print(f"  input tokens: {agent.usage.get('input_tokens', 0)}, output tokens: {agent.usage.get('output_tokens', 0)}")
+        meter = meter or UsageMeter(model=getattr(agent.provider, "model", ""))
+        arg = rest[0].strip().lower() if rest else ""
+        if arg in ("on", "off"):
+            meter.show = arg == "on"
+            print(f"  (the tokens line after each answer is {arg})")
+        elif arg:
+            print("  usage: /usage, /usage on or /usage off")
+        else:
+            print(f"  this session: {meter.session_line(agent.usage)}")
+            if usage.cost(agent.usage, meter.model, meter.prices) is None:
+                print(f"  (no price for {meter.model!r}; add one under [prices] in config.toml to see the cost)")
     elif cmd == "/context":
         ctx = agent.context
         tool_results = [m for m in agent.history if m.role == "tool"]

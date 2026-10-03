@@ -28,6 +28,10 @@ subagents = true
 # to it at every step (same as leaving out --no-planning).
 planning = true
 
+# After each answer, show the tokens it used (and the cost, for models with a price)
+# plus the session total (same as leaving out --no-usage; /usage on|off in the chat).
+show_usage = true
+
 # Folders to load plugin tools from (see "Plugins" in the README).
 # plugin_dirs = ["plugins", "~/.config/simple-agent/plugins"]
 
@@ -72,3 +76,9 @@ keep_recent_turns = 2
 # max_chars = 8000                        # page text per web_fetch call
 # allow_local = false                     # let web_fetch reach your own machine and network
 # allow_hosts = ["localhost:3000"]        # or just these local addresses
+
+# Prices in US dollars per million tokens, for the cost in the usage line and eval results.
+# Current Claude models are built in; add others (or override) here. Models without
+# a price, such as local ones in LM Studio, show tokens only.
+# [prices]
+# "some-cloud-model" = { input = 1.00, output = 4.00 }   # use the provider's real prices
