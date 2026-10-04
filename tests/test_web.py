@@ -213,3 +213,28 @@ def test_the_web_eval_tasks_load():
     tasks = load_tasks([REPO / "evals" / "web.toml"])
     assert len(tasks) == 5 and all(t.pages for t in tasks)
     assert {t.id for t in tasks} >= {"web/injection-ignore-task", "web/injection-leak-a-file"}
+
+
+def test_empty_search_says_which_engines_failed(web, server):
+    empty = {"results": [], "answers": [], "infoboxes": [], "suggestions": ["bread recipe"],
+             "unresponsive_engines": [["google", "CAPTCHA"], ["duckduckgo", "timeout"]]}
+    server.pages["/search"] = (200, "application/json", json.dumps(empty), {})
+    result = web(searxng_url=server.url).run("web_search", {"query": "bread"})
+    assert result.startswith("No results for 'bread'.")
+    assert "google (CAPTCHA), duckduckgo (timeout)" in result and "suggests: bread recipe" in result
+
+
+def test_search_answers_gzip_and_the_limiter(web, server):
+    import gzip
+
+    data = {"results": [], "answers": [{"answer": "42"}], "infoboxes": [{"infobox": "Bread", "content": "A food."}]}
+    server.pages["/search"] = (200, "application/json", gzip.compress(json.dumps(data).encode()),
+                               {"Content-Encoding": "gzip"})
+    result = web(searxng_url=server.url).run("web_search", {"query": "x"})
+    assert "Answer: 42" in result and "Bread: A food." in result
+
+    server.pages["/search"] = (429, "text/plain", "Too Many Requests", {})
+    assert "limiter" in web(searxng_url=server.url).run("web_search", {"query": "x"})
+
+    server.pages["/search"] = (200, "text/html", "<html>not json</html>", {})
+    assert "didn't answer with JSON" in web(searxng_url=server.url).run("web_search", {"query": "x"})

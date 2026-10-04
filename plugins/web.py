@@ -40,6 +40,7 @@ SIMPLE_AGENT_SEARXNG_URL, and SIMPLE_AGENT_FETCH_ALLOW (comma-separated URLs
 or host:port pairs that web_fetch may reach even though they're local).
 """
 
+import gzip
 import ipaddress
 import json
 import os
@@ -73,27 +74,60 @@ USER_AGENT = "simple-agent (learning project; https://github.com/sal007/simple-a
 def web_search(query: str) -> str:
     base = os.environ.get("SIMPLE_AGENT_SEARXNG_URL") or SETTINGS.get("searxng_url", "http://localhost:8080")
     url = f"{base.rstrip('/')}/search?" + urllib.parse.urlencode({"q": query, "format": "json"})
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+    # Accept-Language and Accept-Encoding: SearXNG's bot limiter blocks requests without them.
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.8",
+               "Accept-Encoding": "gzip"}
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-            data = json.loads(response.read(MAX_DOWNLOAD))
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=TIMEOUT) as response:
+            raw = response.read(MAX_DOWNLOAD)
+            if response.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            data = json.loads(raw)
     except urllib.error.HTTPError as exc:
         if exc.code == 403:
             return (f"Error: SearXNG at {base} refused the JSON request (403). Enable it by adding json "
                     "under search.formats in SearXNG's settings.yml, then restart SearXNG.")
+        if exc.code == 429:
+            return (f"Error: SearXNG at {base} answered 429 Too Many Requests: its bot limiter blocked the "
+                    "request. Set server.limiter: false in SearXNG's settings.yml, then restart SearXNG.")
         return f"Error: SearXNG at {base} answered {exc.code} {exc.reason}"
     except (urllib.error.URLError, OSError) as exc:
         return f"Error: could not reach SearXNG at {base} ({exc}). Is it running? Set searxng_url under [plugins.web]."
+    except ValueError as exc:  # Not JSON, or a broken gzip stream.
+        return f"Error: SearXNG at {base} didn't answer with JSON ({exc}). Is searxng_url the right address?"
 
-    results = data.get("results", [])[: int(SETTINGS.get("max_results", 5))]
-    if not results:
-        return f"No results for {query!r}."
     lines = []
+    for answer in data.get("answers") or []:  # Instant answers, e.g. a calculation or a definition.
+        text = answer.get("answer") if isinstance(answer, dict) else answer
+        if text:
+            lines.append(f"Answer: {_one_line(str(text), 300)}")
+    for box in data.get("infoboxes") or []:
+        if box.get("content"):
+            lines.append(f"{box.get('infobox', 'Info')}: {_one_line(box['content'], 300)}")
+    results = (data.get("results") or [])[: int(SETTINGS.get("max_results", 5))]
     for i, r in enumerate(results, 1):
-        lines.append(f"{i}. {r.get('title', '(no title)')}\n   {r.get('url', '')}")
+        lines.append(f"{i}. {r.get('title') or '(no title)'}\n   {r.get('url') or ''}")
         if r.get("content"):
             lines.append(f"   {_one_line(r['content'], 300)}")
+    if not lines:
+        return _no_results(query, base, data)
     return _outside_content(f"search results for {query!r}", "\n".join(lines))
+
+
+def _no_results(query: str, base: str, data: dict) -> str:
+    """Say why SearXNG found nothing, so the model (and you) can tell a real "nothing" from a failure."""
+    message = f"No results for {query!r}."
+    failed = [f"{name} ({reason})" if reason else str(name)
+              for name, reason in (e if isinstance(e, (list, tuple)) and len(e) == 2 else (e, "")
+                                   for e in data.get("unresponsive_engines") or [])]
+    if failed:
+        message += (f" These SearXNG search engines failed: {', '.join(failed)}. That usually means the "
+                    f"engine blocked or rate-limited your SearXNG; try again later, or enable other engines "
+                    f"in SearXNG's settings.yml (check {base} in a browser).")
+    suggestions = (data.get("corrections") or []) + (data.get("suggestions") or [])
+    if suggestions:
+        message += f" SearXNG suggests: {', '.join(map(str, suggestions[:5]))}."
+    return message
 
 
 # --- web_fetch ------------------------------------------------------------------
