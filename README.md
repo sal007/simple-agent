@@ -26,6 +26,31 @@ python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\act
 pip install -e .
 ```
 
+Or with conda instead of a venv:
+
+```bash
+git clone https://github.com/sal007/simple-agent
+cd simple-agent
+conda create -n simple-agent python=3.12
+conda activate simple-agent
+pip install -e .
+```
+
+Run `conda activate simple-agent` in each new terminal before using the agent.
+Conda keeps its environments in your home folder, and the
+[sandbox](#sandbox) hides your home folder from shell commands. The agent
+itself runs normally, but a `python` command the agent runs through
+`run_shell` will probably fail under the OS sandbox. See the Sandbox section
+for ways around it.
+
+Either way, `pip install -e .` links the `simple-agent` command to your
+checkout. After a `git pull` or a branch switch, the new code runs without
+reinstalling. If `pyproject.toml` gains a dependency, run `pip install -e .`
+again.
+
+Start the agent from the simple-agent folder, because it looks for
+`config.toml` and `plugins/` in the current folder first.
+
 ### With LM Studio (local, free)
 
 1. In LM Studio, download a model that supports tool use (for example
@@ -225,7 +250,7 @@ The sandbox holds.
 ```
 
 Network access isn't restricted, so `pip install` and `git pull` still work.
-A program installed inside your home folder (pyenv, nvm, a virtualenv
+A program installed inside your home folder (conda, pyenv, nvm, a virtualenv
 elsewhere) won't run under the OS sandbox, because your home folder is
 hidden. Put it in the workspace, or turn the OS sandbox off.
 
