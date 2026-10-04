@@ -30,6 +30,10 @@ class Tool:
     spec: ToolSpec
     func: Callable[..., Any]
     confirm: bool = False  # Ask the user before every call.
+    # Runs with the same arguments before the user is asked; raising refuses
+    # the call (the sandbox uses it, so you're never asked about a call it
+    # would refuse anyway).
+    check: Callable[..., Any] | None = None
 
 
 # Given a tool name and its arguments, return True to allow the call.
@@ -60,6 +64,9 @@ class ToolRegistry:
     def add(self, spec: ToolSpec, func: Callable[..., Any], confirm: bool = False) -> None:
         """Register a tool without the decorator (mcp.py uses this for server tools)."""
         self._tools[spec.name] = Tool(spec, func, confirm)
+
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
 
     def remove(self, name: str) -> None:
         self._tools.pop(name, None)
@@ -95,6 +102,11 @@ class ToolRegistry:
             return f"Error: unknown tool {name!r}. Available tools: {', '.join(self._tools)}"
         if "__invalid_json__" in arguments:
             return f"Error: arguments were not valid JSON: {arguments['__invalid_json__']}"
+        if tool.check:
+            try:
+                tool.check(**arguments)
+            except Exception as exc:  # noqa: BLE001
+                return f"Error: {exc}"
         if tool.confirm and not (self.approve and self.approve(name, arguments)):
             return "The user declined this tool call. Don't retry it; ask the user what they would like instead."
         try:
@@ -189,8 +201,14 @@ def write_file(path: str, content: str) -> str:
     confirm=True,
 )
 def run_shell(command: str, timeout: int = 60) -> str:
+    return run_command(command, timeout)
+
+
+def run_command(command: str, timeout: int = 60, cwd: str | Path | None = None, wrapper: list[str] | None = None) -> str:
+    """Run a shell command; `wrapper` is a program to run the shell inside (sandbox.py uses it)."""
+    argv = [*wrapper, "/bin/sh", "-c", command] if wrapper else command
     try:
-        done = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+        done = subprocess.run(argv, shell=not wrapper, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return f"Error: the command did not finish within {timeout} seconds"
     output = f"exit code: {done.returncode}\nstdout:\n{done.stdout}\nstderr:\n{done.stderr}"

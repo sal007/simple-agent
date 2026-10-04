@@ -173,6 +173,110 @@ all your folders). Turn it off with `memory = false` or `--no-memory`.
 Memory is only as good as what the model chooses to save: small local models
 tend to save too much or nothing at all, so check `/memory` now and then.
 
+### Sandbox
+
+The file tools and `run_shell` stay inside one folder, the **workspace**. By
+default that's the folder you start simple-agent in, so when you run it from
+the simple-agent folder, that folder is all it can touch. Start-up says
+where it is:
+
+```
+(sandbox: files and run_shell stay in /home/you/simple-agent; run_shell is also sandboxed by the OS (bwrap))
+```
+
+- **`list_files`, `read_file`, `write_file`** refuse any path outside the
+  workspace, after following `..` and symlinks. Relative paths count from the
+  workspace.
+- **Protected files.** `.env` and `config.toml` are refused even inside it,
+  because they can hold API keys.
+- **`run_shell`** runs in the workspace. A command that names a path outside
+  it (`/etc/passwd`, `~/.ssh`, `../other-project`) or a protected file is
+  refused.
+- **Refused calls never reach you.** They're turned down before the y/N
+  prompt, and the model is told why.
+
+**What path checks can and can't do.** For the file tools, the check is
+complete: they only ever touch the one path they're given. For `run_shell`,
+the check only reads the command's text, so it's a speed bump, not a wall. A
+command can build a path the check can't see, such as
+`python3 -c "open('/'+'etc/passwd')"`, `cd "$(dirname "$PWD")"` or a script
+it wrote earlier. The real wall is the operating system's sandbox, which
+`run_shell` uses when it can (`os_sandbox = "auto"`):
+
+| System | Tool | What a command can do |
+| --- | --- | --- |
+| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`sudo apt install bubblewrap`) | Write only in the workspace and a private, throwaway `/tmp`. Everything else is read-only, and your home folder is hidden. |
+| macOS | `sandbox-exec` (built in) | Write only in the workspace and the temp folders. It can't read files in your home folder outside the workspace. |
+| Windows, or Linux without bwrap | none | Only the text check above. Start-up says so. |
+
+To check that it really holds on your machine, run `simple-agent sandbox`. It
+runs a few commands through the OS sandbox: a write in the workspace (should
+work), writes next to it and in your home folder, and a read in your home
+folder (all should be blocked). Each check is listed as `ok` or `FAIL`:
+
+```
+$ simple-agent sandbox
+(sandbox: files and run_shell stay in /Users/you/simple-agent; run_shell is also sandboxed by the OS (sandbox-exec))
+  ok   write a file in the workspace
+  ok   block writing /Users/you/.simple-agent-sandbox-test
+  ok   block reading files in /Users/you
+  ok   git status inside the sandbox
+The sandbox holds.
+```
+
+Network access isn't restricted, so `pip install` and `git pull` still work.
+A program installed inside your home folder (pyenv, nvm, a virtualenv
+elsewhere) won't run under the OS sandbox, because your home folder is
+hidden. Put it in the workspace, or turn the OS sandbox off.
+
+Settings, in `[sandbox]` in `config.toml`:
+
+```toml
+[sandbox]
+workspace = "."                       # or an absolute path to always work in one folder
+protected = [".env", "config.toml"]   # name patterns, e.g. "*.pem"
+os_sandbox = "auto"                   # "off": path checks only
+# enabled = false                     # no sandbox at all
+```
+
+`--workspace FOLDER` picks another folder for one run, and `--no-sandbox`
+turns it off. Sub-agents share the sandbox. Evals use it too, with each task's
+own folder as the workspace (`simple-agent eval --no-sandbox` to compare).
+
+**Sandboxing the whole agent on macOS.** The sandbox above only covers
+`run_shell`. To also contain plugins and MCP servers, you can start the whole
+agent under `sandbox-exec`, with a profile that allows writing only in the
+workspace and the temp folders. Save this as `agent.sb`:
+
+```scheme
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write* (subpath (param "WORKSPACE")) (subpath "/private/tmp") (subpath "/private/var/folders")
+    (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))
+```
+
+Then start the agent with it:
+
+```
+sandbox-exec -f agent.sb -D WORKSPACE="$(pwd -P)" .venv/bin/simple-agent
+```
+
+The catches:
+- Reading isn't limited, because Python and your tools need files all over
+  your home folder.
+- A sandbox can't start another sandbox inside it, so `run_shell` falls back to
+  the text check. Writing is still blocked everywhere outside the workspace.
+- MCP servers started with `npx` need to write to `~/.npm`. To allow that, add
+  `(subpath (param "NPM"))` to the allow line and `-D NPM="$HOME/.npm"` to the
+  command.
+
+**Not covered.**
+- MCP servers are separate programs; give them only the folders they need,
+  such as the folder argument of server-filesystem.
+- Plugins are your own Python code and can do anything.
+- Long-term memory writes to `memory_dir`, which you choose.
+
 ### Tokens and cost
 
 After each answer the agent shows what that turn used and the session total:
@@ -688,6 +792,7 @@ and a setting you commented out counts as present and stays commented out.
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
 | [`simple_agent/config_update.py`](simple_agent/config_update.py) | `simple-agent config`: adds new settings to your `config.toml`. |
 | [`simple_agent/instructions.py`](simple_agent/instructions.py) | Reads AGENTS.md project instructions into the system prompt. |
+| [`simple_agent/sandbox.py`](simple_agent/sandbox.py) | The sandbox: keeps file tools and `run_shell` in the workspace. |
 | [`simple_agent/memory.py`](simple_agent/memory.py) | Long-term memory: notes in `memory/`, their index in the system prompt. |
 | [`simple_agent/usage.py`](simple_agent/usage.py) | Counts tokens and cost per turn, with built-in Claude prices. |
 | [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
@@ -782,7 +887,7 @@ answer (input piped in, or tests), these tools are always declined. `/tools`
 marks them "(asks first)". The check lives in `ToolRegistry.run()`, and the
 CLI plugs in the prompt by setting `agent.tools.approve`. Read each command
 before you allow it: `run_shell` runs exactly what the model wrote, with your
-permissions.
+permissions, limited only by the [sandbox](#sandbox).
 
 ## Extending it
 

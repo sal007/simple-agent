@@ -6,11 +6,12 @@ import argparse
 import datetime as _dt
 import json
 import sys
+from pathlib import Path
 
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import config_update, instructions, mcp, memory, planning, sessions, subagents
+from . import config_update, instructions, mcp, memory, planning, sandbox, sessions, subagents
 from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
@@ -41,7 +42,7 @@ HELP = """Commands:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval. Add new settings to your config.toml with: simple-agent config.")
+    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval. Add new settings to your config.toml with: simple-agent config. Check the sandbox with: simple-agent sandbox.")
     parser.add_argument("--provider", choices=list(PROVIDER_DEFAULTS), help="Which backend to use.")
     parser.add_argument("--model", help="Model name, e.g. the id LM Studio shows, or claude-opus-5-5.")
     parser.add_argument("--base-url", help="API base URL for the openai provider (LM Studio, Ollama, ...).")
@@ -55,6 +56,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the model the delegate tool.")
     parser.add_argument("--no-instructions", action="store_true", help="Don't read AGENTS.md project instructions.")
     parser.add_argument("--no-memory", action="store_true", help="Don't give the agent long-term memory notes.")
+    parser.add_argument("--workspace", metavar="FOLDER", help="The folder the file tools and run_shell are kept in (default: here).")
+    parser.add_argument("--no-sandbox", action="store_true", help="Let the file tools and run_shell reach any file you can.")
     parser.add_argument("--no-usage", action="store_true", help="Don't show tokens and cost after each answer.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
@@ -71,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         return evals.main(argv[1:])
     if argv[:1] == ["config"]:  # `simple-agent config` adds new settings to your config.toml.
         return config_update.main(argv[1:])
+    if argv[:1] == ["sandbox"]:  # `simple-agent sandbox` checks that the OS sandbox holds.
+        return sandbox.main(argv[1:])
     args = parse_args(argv)
     try:
         settings = resolve(load_file(args.config), args.provider, args.model, args.base_url)
@@ -98,6 +103,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"({message})")
     agent.tools = agent.tools.copy()  # Our own registry, so setting approve doesn't change the shared one.
     agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
+    if settings.sandbox and not args.no_sandbox:
+        box = settings.sandbox
+        box.folder = box.root if not args.workspace else Path(args.workspace).expanduser().resolve()
+        if not box.root.is_dir():
+            print(f"Setup error: the workspace {box.root} is not a folder", file=sys.stderr)
+            return 1
+        sandbox.enable(agent, box)  # File tools and run_shell stay in the workspace (see sandbox.py).
+        print(f"({box.describe()})")
+    elif not args.no_sandbox and args.workspace:
+        print("(--workspace has no effect: the sandbox is off in config.toml)")
+    else:
+        print("(sandbox off: the file tools and run_shell can reach any file you can)")
     if settings.project_instructions and not args.no_instructions:
         project = instructions.enable(agent)  # AGENTS.md files join the system prompt.
         for line in project.describe():

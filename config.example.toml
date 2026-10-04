@@ -72,6 +72,17 @@ compact = true
 keep_recent_turns = 2
 # enabled = false   # turn context management off entirely
 
+[sandbox]
+# Keep the file tools and run_shell inside one folder, the workspace (see "Sandbox" in the README).
+# "." is the folder you start simple-agent in; use an absolute path to always work in one folder.
+workspace = "."
+# Files the agent can't read or write even inside the workspace (patterns, matched against names).
+protected = [".env", "config.toml"]
+# "auto": also run shell commands in the operating system's sandbox when there is one
+# (bubblewrap on Linux, sandbox-exec on macOS); "off": path checks only.
+os_sandbox = "auto"
+# enabled = false   # no sandbox: the tools can reach any file you can (same as --no-sandbox)
+
 # MCP servers: each one adds its tools next to the built-in ones (see "MCP servers" in the README).
 # Their tools ask y/N before every call unless the server has trusted = true.
 # [mcp_servers.files]
