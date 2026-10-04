@@ -186,6 +186,70 @@ def from_settings(section: dict, workspace: str | None = None) -> Sandbox | None
     return Sandbox(workspace or section.get("workspace", "."), list(section.get("protected", DEFAULT_PROTECTED)), os_sandbox)
 
 
+# --- `simple-agent sandbox`: check that the OS sandbox really holds ------------------
+
+
+def self_test(box: Sandbox, log=print) -> bool:
+    """Run real commands through run_shell's OS sandbox (skipping the text check) and report what got through."""
+    log(f"({box.describe()})")
+    if not box.os_tool():
+        log("No OS sandbox, so there is nothing to test: commands are only checked by their text.")
+        return False
+    root, home = box.root, Path.home().resolve()
+    name = ".simple-agent-sandbox-test"
+    secret = "sandbox-probe-" + os.urandom(4).hex()
+    probe = home / (name + "-read")
+    outside = [p for p in (home / name, root.parent / name) if not p.is_relative_to(root)]
+    results = []
+
+    def run(command: str) -> str:
+        return _tools.run_command(command, 20, cwd=root, wrapper=box.wrapper())
+
+    out = run(f"echo ok > {name} && cat {name} && rm {name}")
+    results.append(("write a file in the workspace", "stdout:\nok" in out, out))
+    for path in outside:
+        out = run(f"echo x > {shlex.quote(str(path))}")
+        escaped = path.exists()
+        if escaped:
+            path.unlink()
+        results.append((f"block writing {path}", not escaped, out))
+    if not root.is_relative_to(home):
+        probe.write_text(secret)
+        try:
+            out = run(f"cat {shlex.quote(str(probe))}")
+        finally:
+            probe.unlink()
+        results.append((f"block reading files in {home}", secret not in out, out))
+
+    ok = True
+    for label, passed, out in results:
+        ok &= passed
+        log(f"  {'ok  ' if passed else 'FAIL'} {label}")
+        if not passed:
+            log("       " + out.strip().replace("\n", "\n       "))
+    if (root / ".git").exists():
+        out = run("git status --short | head -3")
+        works = out.startswith("exit code: 0") and "fatal" not in out
+        log(f"  {'ok  ' if works else 'note'} git status inside the sandbox"
+            + ("" if works else ":\n       " + out.strip().replace("\n", "\n       ")))
+    log("The sandbox holds." if ok else "The sandbox did NOT hold; please report the lines above.")
+    return ok
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    from .config import load_file, resolve
+
+    parser = argparse.ArgumentParser(prog="simple-agent sandbox", description="Check that run_shell's OS sandbox works here.")
+    parser.add_argument("--workspace", help="The workspace to test (default: from config.toml, usually here).")
+    parser.add_argument("--config", help="Path to a config.toml.")
+    args = parser.parse_args(argv)
+    box = resolve(load_file(args.config)).sandbox or Sandbox()
+    box.folder = Path(args.workspace or box.folder).expanduser().resolve()
+    return 0 if self_test(box) else 1
+
+
 # --- helpers -----------------------------------------------------------------------
 
 

@@ -176,3 +176,29 @@ def test_cli(tmp_path, monkeypatch, capsys):
     assert main(["--no-plugins", "--workspace", "missing"]) == 1
     assert "is not a folder" in capsys.readouterr().err
     os.chdir(tmp_path)
+
+
+def test_self_test_reports_when_the_sandbox_leaks(box, monkeypatch):
+    lines = []
+    assert sandbox.self_test(box, lines.append) is False and "nothing to test" in lines[-1]
+
+    # Pretend `env` is an OS sandbox: it runs the command unchanged, so writes get out.
+    monkeypatch.setattr(Sandbox, "os_tool", lambda self: "fake")
+    monkeypatch.setattr(Sandbox, "wrapper", lambda self: ["env"])
+    monkeypatch.setattr(sandbox.Path, "home", classmethod(lambda cls: box.root.parent / "home"))
+    (box.root.parent / "home").mkdir()
+    lines.clear()
+    assert sandbox.self_test(box, lines.append) is False
+    assert any(line.startswith("  ok   write a file in the workspace") for line in lines)
+    assert any(line.startswith("  FAIL block writing") for line in lines)
+    assert any(line.startswith("  FAIL block reading") for line in lines)
+    assert "did NOT hold" in lines[-1]
+    assert not list(box.root.parent.glob("**/.simple-agent-sandbox-test*"))  # Cleaned up.
+
+
+@pytest.mark.skipif(not (shutil.which("bwrap") and sandbox._works(["bwrap", "--ro-bind", "/", "/"])),
+                    reason="bubblewrap isn't available here")
+def test_self_test_passes_with_bubblewrap(box, capsys):
+    box.os_sandbox = "auto"
+    assert main(["sandbox", "--workspace", str(box.root)]) == 0
+    assert "The sandbox holds." in capsys.readouterr().out

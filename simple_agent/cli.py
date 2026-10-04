@@ -42,7 +42,7 @@ HELP = """Commands:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval. Add new settings to your config.toml with: simple-agent config.")
+    parser = argparse.ArgumentParser(prog="simple-agent", description="A small CLI agent for learning.", epilog="Run the eval tasks with: simple-agent eval. Add new settings to your config.toml with: simple-agent config. Check the sandbox with: simple-agent sandbox.")
     parser.add_argument("--provider", choices=list(PROVIDER_DEFAULTS), help="Which backend to use.")
     parser.add_argument("--model", help="Model name, e.g. the id LM Studio shows, or claude-opus-5-5.")
     parser.add_argument("--base-url", help="API base URL for the openai provider (LM Studio, Ollama, ...).")
@@ -74,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         return evals.main(argv[1:])
     if argv[:1] == ["config"]:  # `simple-agent config` adds new settings to your config.toml.
         return config_update.main(argv[1:])
+    if argv[:1] == ["sandbox"]:  # `simple-agent sandbox` checks that the OS sandbox holds.
+        return sandbox.main(argv[1:])
     args = parse_args(argv)
     try:
         settings = resolve(load_file(args.config), args.provider, args.model, args.base_url)

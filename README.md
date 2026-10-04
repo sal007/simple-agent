@@ -209,6 +209,21 @@ it wrote earlier. The real wall is the operating system's sandbox, which
 | macOS | `sandbox-exec` (built in) | Write only in the workspace and the temp folders. It can't read files in your home folder outside the workspace. |
 | Windows, or Linux without bwrap | none | Only the text check above. Start-up says so. |
 
+To check that it really holds on your machine, run `simple-agent sandbox`. It
+runs a few commands through the OS sandbox: a write in the workspace (should
+work), writes next to it and in your home folder, and a read in your home
+folder (all should be blocked). Each check is listed as `ok` or `FAIL`:
+
+```
+$ simple-agent sandbox
+(sandbox: files and run_shell stay in /Users/you/simple-agent; run_shell is also sandboxed by the OS (sandbox-exec))
+  ok   write a file in the workspace
+  ok   block writing /Users/you/.simple-agent-sandbox-test
+  ok   block reading files in /Users/you
+  ok   git status inside the sandbox
+The sandbox holds.
+```
+
 Network access isn't restricted, so `pip install` and `git pull` still work.
 A program installed inside your home folder (pyenv, nvm, a virtualenv
 elsewhere) won't run under the OS sandbox, because your home folder is
@@ -227,6 +242,34 @@ os_sandbox = "auto"                   # "off": path checks only
 `--workspace FOLDER` picks another folder for one run, and `--no-sandbox`
 turns it off. Sub-agents share the sandbox. Evals use it too, with each task's
 own folder as the workspace (`simple-agent eval --no-sandbox` to compare).
+
+**Sandboxing the whole agent on macOS.** The sandbox above only covers
+`run_shell`. To also contain plugins and MCP servers, you can start the whole
+agent under `sandbox-exec`, with a profile that allows writing only in the
+workspace and the temp folders. Save this as `agent.sb`:
+
+```scheme
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write* (subpath (param "WORKSPACE")) (subpath "/private/tmp") (subpath "/private/var/folders")
+    (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))
+```
+
+Then start the agent with it:
+
+```
+sandbox-exec -f agent.sb -D WORKSPACE="$(pwd -P)" .venv/bin/simple-agent
+```
+
+The catches:
+- Reading isn't limited, because Python and your tools need files all over
+  your home folder.
+- A sandbox can't start another sandbox inside it, so `run_shell` falls back to
+  the text check. Writing is still blocked everywhere outside the workspace.
+- MCP servers started with `npx` need to write to `~/.npm`. To allow that, add
+  `(subpath (param "NPM"))` to the allow line and `-D NPM="$HOME/.npm"` to the
+  command.
 
 **Not covered.**
 - MCP servers are separate programs; give them only the folders they need,
