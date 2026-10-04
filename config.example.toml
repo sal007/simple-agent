@@ -33,6 +33,13 @@ planning = true
 # Same as leaving out --no-instructions; /instructions in the chat shows what was read.
 project_instructions = true
 
+# Long-term memory: the agent keeps notes between conversations as Markdown files in
+# memory_dir and sees their titles at every step (same as leaving out --no-memory;
+# /memory in the chat lists them). Use "~/.config/simple-agent/memory" to share one
+# memory across every folder you run the agent in.
+memory = true
+memory_dir = "memory"
+
 # After each answer, show the tokens it used (and the cost, for models with a price)
 # plus the session total (same as leaving out --no-usage; /usage on|off in the chat).
 show_usage = true

@@ -68,6 +68,8 @@ Type messages at the `you>` prompt. Lines starting with `/` are commands:
 | `/reload`      | load the plugin files again       |
 | `/history`     | show the conversation so far      |
 | `/instructions` | the project instructions (AGENTS.md) in use |
+| `/memory`      | list the agent's long-term memory notes |
+| `/memory forget <title>` | delete a note       |
 | `/usage`       | tokens (and cost) this session    |
 | `/usage on\|off` | show or hide the line after each answer |
 | `/reset`       | start a new conversation          |
@@ -122,6 +124,54 @@ characters so a huge one can't crowd out the conversation. Turn it off with
 To see how well a model follows such rules, `evals/instructions.toml` has
 tasks whose folder holds an `AGENTS.md` with a rule the prompt doesn't mention
 (compare with `--no-instructions`).
+
+### Long-term memory
+
+Each conversation normally starts from nothing. With long-term memory the agent
+keeps notes that carry over: your preferences, facts about your projects or
+setup, decisions, lessons from its mistakes. It decides itself what's worth
+keeping, and every change shows in the chat:
+
+```
+you> I always want metric units, by the way.
+  tool> save_memory({'title': 'Preferred units', ...})
+  memory> saved 'Preferred units' (memory/preferred-units.md)
+assistant> Noted, I'll use metric units from now on.
+```
+
+Each note is a Markdown file in `memory/`, so you can read, edit or delete
+them yourself (a file you write by hand works too, with or without the header):
+
+```markdown
+---
+title: Preferred units
+description: Metric units in every answer
+updated: 2026-10-04
+---
+Use metric units (km, kg, °C). Convert imperial values the user pastes.
+```
+
+How the model uses them:
+
+- At every step the system prompt lists each note's **title and description**,
+  not the full text, so the prompt stays small even with many notes.
+- When a note looks relevant, the model reads it with `read_memory`.
+- It saves or updates a note with `save_memory` (saving with an existing title
+  replaces that note) and removes one with `delete_memory`, which asks you y/N.
+
+There is no search beyond that list (no embeddings or vector database); the
+model picks notes by their descriptions, which works well up to a few hundred
+notes. [Sub-agents](#sub-agents) can read notes but not change them, and
+[evals](#eval-runner) run without memory so results don't depend on what
+earlier runs saved.
+
+`/memory` lists the notes and `/memory forget <title>` deletes one. The folder
+is `memory_dir` in `config.toml` (default `memory`, relative to where you start
+the agent; set `"~/.config/simple-agent/memory"` for one memory shared across
+all your folders). Turn it off with `memory = false` or `--no-memory`.
+
+Memory is only as good as what the model chooses to save: small local models
+tend to save too much or nothing at all, so check `/memory` now and then.
 
 ### Tokens and cost
 
@@ -623,6 +673,7 @@ and a setting you commented out counts as present and stays commented out.
 | [`simple_agent/tools.py`](simple_agent/tools.py) | The tool registry and the starter tools. |
 | [`simple_agent/config_update.py`](simple_agent/config_update.py) | `simple-agent config`: adds new settings to your `config.toml`. |
 | [`simple_agent/instructions.py`](simple_agent/instructions.py) | Reads AGENTS.md project instructions into the system prompt. |
+| [`simple_agent/memory.py`](simple_agent/memory.py) | Long-term memory: notes in `memory/`, their index in the system prompt. |
 | [`simple_agent/usage.py`](simple_agent/usage.py) | Counts tokens and cost per turn, with built-in Claude prices. |
 | [`simple_agent/plugins.py`](simple_agent/plugins.py) | Loads extra tools from `.py` files in the plugin folders. |
 | [`plugins/word_count.py`](plugins/word_count.py) | An example plugin. |

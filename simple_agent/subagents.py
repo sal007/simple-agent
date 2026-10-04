@@ -16,11 +16,12 @@ that contains everything the helper needs, and the helper's model calls use
 tokens too (they are added to the main agent's usage).
 
 A helper can't delegate again, so there is only ever one level of sub-agents.
+It can read long-term memory notes (memory.py) but not save or delete them.
 """
 
 from __future__ import annotations
 
-from . import instructions, planning
+from . import instructions, memory, planning
 from .agent import Agent, AgentEvents
 from .providers.base import ToolSpec
 
@@ -75,6 +76,13 @@ def enable(agent: Agent) -> None:
         project = instructions.instructions_of(agent)
         if project:
             instructions.enable(helper, project)  # The project's rules apply to the helper too.
+        notes = memory.memory_of(agent)
+        if notes:
+            # The helper can read the notes but not change them: what's worth
+            # remembering is the main agent's call (and yours).
+            for name in memory.WRITE_TOOLS:
+                tools.remove(name)
+            memory.enable(helper, notes, read_only=True)
         if planning.planner_of(agent):
             # The parent plans (planning.py), so the helper gets a plan of its
             # own rather than the parent's update_plan tool.
