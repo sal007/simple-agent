@@ -10,6 +10,7 @@ from pathlib import Path
 from .agent import DEFAULT_SYSTEM_PROMPT
 from .context import ContextManager
 from .mcp import McpServerConfig
+from .sandbox import Sandbox, from_settings as _sandbox
 from .usage import DEFAULT_PRICES, prices_from_config
 
 # Sensible starting points for each provider. LM Studio is the default because
@@ -46,6 +47,7 @@ class Settings:
     project_instructions: bool = True  # Read AGENTS.md files (see instructions.py).
     memory: bool = True  # Long-term memory notes (see memory.py).
     memory_dir: str = "memory"
+    sandbox: Sandbox | None = field(default_factory=Sandbox)  # Keep tools in the workspace (see sandbox.py).
     show_usage: bool = True  # Print tokens (and cost) after each answer (see usage.py).
     prices: dict[str, tuple[float, float]] = field(default_factory=lambda: dict(DEFAULT_PRICES))
 
@@ -97,6 +99,7 @@ def resolve(
         project_instructions=bool(file_config.get("project_instructions", True)),
         memory=bool(file_config.get("memory", True)),
         memory_dir=file_config.get("memory_dir", "memory"),
+        sandbox=_sandbox(file_config.get("sandbox", {})),
         show_usage=bool(file_config.get("show_usage", True)),
         prices=prices_from_config(file_config.get("prices", {})),
     )

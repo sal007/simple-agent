@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__, instructions, planning, subagents, usage
+from . import __version__, instructions, planning, sandbox, subagents, usage
 from .agent import Agent, AgentEvents
 from .config import load_file, resolve
 from .plugins import PluginLoader
@@ -448,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the delegate tool.")
     parser.add_argument("--no-instructions", action="store_true", help="Don't read AGENTS.md files in task folders.")
     parser.add_argument("--no-planning", action="store_true", help="Don't offer the update_plan tool.")
+    parser.add_argument("--no-sandbox", action="store_true", help="Don't keep the tools inside each task's folder.")
     parser.add_argument("--compare", nargs="+", metavar="RESULTS", help="Compare saved results files instead of running.")
     args = parser.parse_args(argv)
 
@@ -468,8 +469,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # The same tools as the chat: built-ins plus plugins. (MCP servers are
     # left out so every run starts quickly and the same way.)
+    # The sandbox follows each task's folder (it is "." while the task runs).
+    box = None
+    if settings.sandbox and not args.no_sandbox:
+        box = sandbox.Sandbox(".", settings.sandbox.protected, settings.sandbox.os_sandbox)
+    base = sandbox.apply(default_tools, box) if box else default_tools
     tools: ToolRegistry = PluginLoader(
-        [] if args.no_plugins else settings.plugin_dirs, default_tools, settings.plugin_settings
+        [] if args.no_plugins else settings.plugin_dirs, base, settings.plugin_settings
     ).load()
 
     use_subagents = settings.subagents and not args.no_subagents
@@ -510,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         "subagents": use_subagents,
         "planning": use_planning,
         "project_instructions": use_instructions,
+        "sandbox": bool(box),
         **run,
     }
     print(f"Results saved to {save(run, args.out, provider)}")
