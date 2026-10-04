@@ -44,6 +44,8 @@ class Settings:
     planning: bool = True  # Offer the update_plan tool (see planning.py).
     plugin_settings: dict[str, dict] = field(default_factory=dict)  # [plugins.<name>] tables.
     project_instructions: bool = True  # Read AGENTS.md files (see instructions.py).
+    memory: bool = True  # Long-term memory notes (see memory.py).
+    memory_dir: str = "memory"
     show_usage: bool = True  # Print tokens (and cost) after each answer (see usage.py).
     prices: dict[str, tuple[float, float]] = field(default_factory=lambda: dict(DEFAULT_PRICES))
 
@@ -93,6 +95,8 @@ def resolve(
         planning=bool(file_config.get("planning", True)),
         plugin_settings=dict(file_config.get("plugins", {})),
         project_instructions=bool(file_config.get("project_instructions", True)),
+        memory=bool(file_config.get("memory", True)),
+        memory_dir=file_config.get("memory_dir", "memory"),
         show_usage=bool(file_config.get("show_usage", True)),
         prices=prices_from_config(file_config.get("prices", {})),
     )

@@ -8,3 +8,4 @@ config.toml
 traces/
 sessions/
 eval_results/
+memory/

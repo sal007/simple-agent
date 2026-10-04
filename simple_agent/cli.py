@@ -10,7 +10,7 @@ import sys
 from . import __version__
 from .agent import Agent, AgentEvents
 from .config import PROVIDER_DEFAULTS, load_file, resolve
-from . import config_update, instructions, mcp, planning, sessions, subagents
+from . import config_update, instructions, mcp, memory, planning, sessions, subagents
 from .plugins import PluginLoader
 from .providers import create_provider
 from .context import CLEARED_PREFIX
@@ -24,6 +24,8 @@ HELP = """Commands:
   /tools         list the tools the agent can use
   /plan          show the agent's current plan
   /instructions  show the project instructions (AGENTS.md) the agent follows
+  /memory        list the agent's long-term memory notes
+  /memory forget <title>  delete a note
   /plugins       list the plugin files and the tools they added
   /reload        load the plugin files again (after editing one)
   /history       show the conversation so far
@@ -52,6 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-planning", action="store_true", help="Don't offer the model the update_plan tool.")
     parser.add_argument("--no-subagents", action="store_true", help="Don't offer the model the delegate tool.")
     parser.add_argument("--no-instructions", action="store_true", help="Don't read AGENTS.md project instructions.")
+    parser.add_argument("--no-memory", action="store_true", help="Don't give the agent long-term memory notes.")
     parser.add_argument("--no-usage", action="store_true", help="Don't show tokens and cost after each answer.")
     parser.add_argument("--no-mcp", action="store_true", help="Don't start the MCP servers from the config file.")
     parser.add_argument("--trace-dir", help="Where trace logs go (default: ./traces).")
@@ -93,11 +96,14 @@ def main(argv: list[str] | None = None) -> int:
         servers, messages = mcp.connect(settings.mcp_servers, agent.tools)
         for message in messages:
             print(f"({message})")
+    agent.tools = agent.tools.copy()  # Our own registry, so setting approve doesn't change the shared one.
     agent.tools.approve = _confirm  # write_file, run_shell and MCP tools ask here before running.
     if settings.project_instructions and not args.no_instructions:
         project = instructions.enable(agent)  # AGENTS.md files join the system prompt.
         for line in project.describe():
             print(f"(project instructions: {line})")
+    if settings.memory and not args.no_memory:
+        memory.enable(agent, memory.Memory(settings.memory_dir, on_change=_memory_line))  # See memory.py.
     if settings.subagents and not args.no_subagents:
         subagents.enable(agent)  # Adds the delegate tool (see subagents.py).
     if settings.planning and not args.no_planning:
@@ -241,6 +247,24 @@ def _command(
             for path in project.files():
                 print(f"  --- {path} ---")
                 print("  " + project.read(path).replace("\n", "\n  "))
+    elif cmd == "/memory":
+        notes = memory.memory_of(agent)
+        arg = rest[0].strip() if rest else ""
+        if notes is None:
+            print("  (long-term memory is off)")
+        elif arg.lower().startswith("forget"):
+            title = arg[len("forget"):].strip()
+            result = notes.delete(title) if title else "usage: /memory forget <title>"
+            if not notes.on_change or not result.startswith("Deleted"):  # Otherwise _memory_line said it.
+                print(f"  {result}")
+        elif arg:
+            print("  usage: /memory or /memory forget <title>")
+        elif not notes.notes():
+            print(f"  (no notes yet in {notes.folder}/; the agent saves them with save_memory)")
+        else:
+            for note in notes.notes():
+                print(f"  {note.title}: {note.description or '(no description)'} ({note.updated or 'no date'})")
+            print(f"  (the notes are Markdown files in {notes.folder}/; edit or delete them as you like)")
     elif cmd == "/usage":
         meter = meter or UsageMeter(model=getattr(agent.provider, "model", ""))
         arg = rest[0].strip().lower() if rest else ""
@@ -298,6 +322,11 @@ def _command(
     else:
         print(f"  Unknown command {cmd}. Type /help.")
     return None
+
+
+def _memory_line(kind: str, title: str, path) -> None:
+    """Every change to long-term memory shows in the chat, so nothing is remembered behind your back."""
+    print(f"  memory> {kind} {title!r} ({path})")
 
 
 def _confirm(name: str, arguments: dict) -> bool:
